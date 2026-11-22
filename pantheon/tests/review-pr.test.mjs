@@ -9,10 +9,11 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { main as runReview } from "../src/review-runner/index.mjs";
-import { BINDING_SCHEMA, LABS, MARKER, gitCli, judgeReviewer, main, panelProblems, reviewerSections, runnerArgs, sha256, shapeProblems, verifyBinding } from "../src/review-runner/pr-review.mjs";
+import { BINDING_NAME_RE, BINDING_SCHEMA, LABS, MARKER, gitCli, judgeReviewer, main, panelProblems, reviewerSections, runnerArgs, sha256, shapeProblems, verifyBinding } from "../src/review-runner/pr-review.mjs";
 import { assignmentRow } from "../src/review-runner/brief.mjs";
 import { REAL_ROOT, fixtureRepo, fakeFetch, capture, deps, LIMITS, cleanup, mkdtemp, sh } from "./review-runner-helper.mjs";
 import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 
 test.after(cleanup);
 const FAKE = fileURLToPath(new URL("./fixtures/review-pr-fake-runner.mjs", import.meta.url));
@@ -62,13 +63,13 @@ async function prFixture({ panel = PANEL, author = ["Anthropic"], edit } = {}) {
 // The checkout's origin is a local bare repository; its configured URL is what a GitHub checkout's would be.
 const gitFn = (root, args) => args[0] === "remote" && args[1] === "get-url" ? Promise.resolve({ code: 0, stdout: "https://github.com/dsmcewan/OPHANIM.git\n", stderr: "" }) : gitCli(root, args);
 
-async function run(f, { argv = [], behaviour = {}, stageRoot, graceMs, now } = {}) {
+async function run(f, { argv = [], behaviour = {}, stageRoot, graceMs, now, runnerScript = FAKE, env: extraEnv = {} } = {}) {
   const probe = join(f.root, `probe-${Math.random().toString(16).slice(2)}.jsonl`);
   const o = capture();
   const t0 = now ?? new Date(Date.UTC(2026, 10, 21, 21, 30, 0));
   const code = await main(["--binding", `${DIR}/binding.json`, "--telos-root", f.repo, "--max-wall-s", "60", ...argv], {
-    repoRoot: f.repo, env: { ...process.env, FAKE_RR: JSON.stringify(behaviour), FAKE_RR_PROBE: probe }, out: o.stdout, err: o.stderr,
-    now: () => t0, gitFn, runnerScript: FAKE, stageRoot: stageRoot ?? "/tmp", graceMs: graceMs ?? 60_000,
+    repoRoot: f.repo, env: { ...process.env, FAKE_RR: JSON.stringify(behaviour), FAKE_RR_PROBE: probe, ...extraEnv }, out: o.stdout, err: o.stderr,
+    now: () => t0, gitFn, runnerScript, stageRoot: stageRoot ?? "/tmp", graceMs: graceMs ?? 60_000,
   });
   const lines = existsSync(probe) ? readFileSync(probe, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse) : [];
   return { code, o, probe: lines, releaseDir: join(f.repo, DIR, `findings-${f.head.slice(0, 12)}-${t0.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z")}`) };
@@ -398,4 +399,150 @@ test("PR REVIEW: judgeReviewer reads only what the run left, never the reviewer'
   const j = await judgeReviewer({ binding: b, reviewer: { lab: "xai", model: "grok-4.7" }, outDir: d, run: { exit_code: 0, signal: null, killed_for: null, spawn_error: null, stderr_tail: [] } });
   assert.equal(j.status, "incomplete");
   assert.match(j.why.join("; "), /missing evidence: no readable transcript/);
+});
+
+// ---- the xAI SDK route: one lab over the official SDK, the others unchanged --------------------------------------
+
+const SDK_LIMITS = { max_turns: 8, max_tool_calls: 10, max_output_tokens: 4000, timeout_s: 120 };
+const SDK_XAI = { lab: "xai", model: "grok-4.7", route: "xai-sdk", limits: SDK_LIMITS };
+const SDK_RUNNER = fileURLToPath(new URL("./fixtures/review-pr-sdk-runner.mjs", import.meta.url));
+
+test("XAI SDK ROUTE: the binding may route the xAI reviewer over the SDK, with declared limits; nothing else may", () => {
+  const ok = { panel: [SDK_XAI, PANEL[1], PANEL[2]] };
+  const probs = b => shapeProblems({ ...b }).filter(p => p.startsWith("panel"));
+  assert.deepEqual(probs(ok), []);
+  assert.deepEqual(panelProblems({ ...ok, author: { labs: ["Anthropic"] } }), [], "the route changes no independence rule");
+  assert.match(probs({ panel: [{ ...PANEL[1], route: "xai-sdk", limits: SDK_LIMITS }] }).join("; "), /panel: route xai-sdk is for the xai lab only/);
+  assert.match(probs({ panel: [{ ...SDK_XAI, route: "grok-http" }] }).join("; "), /panel: route "grok-http" is not a route \(xai-sdk\)/);
+  assert.match(probs({ panel: [{ ...SDK_XAI, limits: undefined }] }).join("; "), /panel: route xai-sdk must declare limits/);
+  assert.match(probs({ panel: [{ ...SDK_XAI, limits: { ...SDK_LIMITS, max_turns: 0 } }] }).join("; "), /panel: limits\.max_turns must be a whole number from 1 to 200/);
+  assert.match(probs({ panel: [{ ...SDK_XAI, limits: { ...SDK_LIMITS, extra: 1 } }] }).join("; "), /panel: limits has an unknown key "extra"/);
+  assert.match(probs({ panel: [{ ...PANEL[1], limits: SDK_LIMITS }] }).join("; "), /panel: limits apply to a routed reviewer only/);
+});
+
+test("XAI SDK ROUTE: runnerArgs dispatch the routed reviewer over the API with its limits, and the legacy reviewers exactly as before", () => {
+  const binding = { brief: { dir: DIR, assignment: 1 }, head: { sha: "a".repeat(40) } };
+  const common = { binding, readmeRow: { lab: "xAI", model: "grok-4.7" }, telosRoot: "/t", maxWallS: 900, dryRun: false, hostFlags: { "grok-state-dir": "/g", "codex-cli": "/c" } };
+  assert.deepEqual(runnerArgs({ ...common, reviewer: SDK_XAI, out: "/tmp/s/xai" }), ["--via", "api", "--xai-transport", "sdk", "--review-dir", DIR, "--assignment", "1",
+    "--commit", "a".repeat(40), "--max-turns", "8", "--max-tool-calls", "10", "--max-output-tokens", "4000", "--timeout-s", "120", "--max-wall-s", "900", "--telos-root", "/t", "--out", "/tmp/s/xai"]);
+  // The legacy bindings: byte-for-byte what they dispatched before (the subscription and its host flags).
+  assert.deepEqual(runnerArgs({ ...common, reviewer: { lab: "xai", model: "grok-4.7" }, out: "/tmp/s/xai" }), ["--via", "subscription", "--review-dir", DIR, "--assignment", "1",
+    "--commit", "a".repeat(40), "--max-wall-s", "900", "--telos-root", "/t", "--out", "/tmp/s/xai", "--grok-state-dir", "/g", "--codex-cli", "/c"]);
+  assert.deepEqual(runnerArgs({ ...common, reviewer: PANEL[1], out: "/tmp/s/google", dryRun: true }), ["--via", "subscription", "--review-dir", DIR, "--assignment", "1",
+    "--commit", "a".repeat(40), "--max-wall-s", "900", "--telos-root", "/t", "--out", "/tmp/s/google", "--reviewer", "google:gemini-4-carbon", "--grok-state-dir", "/g", "--codex-cli", "/c", "--dry-run"]);
+});
+
+// What a qualifying API/SDK run leaves in its out directory, with one thing changed per refusal.
+async function sdkRun({ binding: b, edit = t => t, findings } = {}) {
+  const d = await mkdtemp(join(tmpdir(), "prr-sdk-judge-"));
+  const t = edit({
+    schema: "ophanim.review-transcript/v1", via: "api", transport: "xai-sdk", assignment: 1, lab: "xAI", vendor: "xai", requested_model: "grok-4.7", commit: b.head.sha,
+    prompt: { readme_sha256: b.brief.files["README.md"], assignment_sha256: b.brief.files["1-x.md"], harness_template: { path: `${DIR}/HARNESS.md`, sha256: b.brief.files["HARNESS.md"] } },
+    status: "complete", stop_reason: "final answer", coverage: { source_reads: 3, denied_reads: 0, tests_run: 1, tests_allowed: true, method: "tool events" }, coverage_gate: { ok: true, reasons: [] },
+    limits: { ...SDK_LIMITS, max_wall_s: 900 }, provider_calls: 3, tool_calls: 4, served_models: ["grok-4.7"], worktree_check: { changed: [".review-tests/stop.test.mjs"], violations: [] },
+    cost_totals: { reported_calls: 0, unreported_calls: 3, value: null, field: null }, events: [],
+  });
+  await writeFile(join(d, "findings-1-xai.transcript.json"), JSON.stringify(t));
+  await writeFile(join(d, "findings-1-xai.md"), findings ?? `header\n${MARKER}\n\n## Findings\n1. holds\n## Tests run\nnode --test .review-tests/stop.test.mjs: exit 0\n## Unresolved questions\nnone\n`);
+  return d;
+}
+const OK_RUN = { exit_code: 0, signal: null, killed_for: null, spawn_error: null, stderr_tail: [] };
+const JB = { head: { sha: "a".repeat(40) }, brief: { assignment: 1, files: { "README.md": "1".repeat(64), "1-x.md": "2".repeat(64), "HARNESS.md": "3".repeat(64), "HARNESS-cli.md": "4".repeat(64) } } };
+
+test("XAI SDK ROUTE: judgeReviewer accepts a qualifying SDK run and records its route, transport, served model and cost reading", async () => {
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  assert.equal(j.route, "xai-sdk");
+  assert.equal(j.runner.transport, "xai-sdk");
+  assert.deepEqual(j.served_models, ["grok-4.7"]);
+  assert.deepEqual(j.cost_totals, { reported_calls: 0, unreported_calls: 3, value: null, field: null });
+  assert.equal(j.tests.tests_run, 1);
+});
+
+test("XAI SDK ROUTE: judgeReviewer refuses the wrong transport, the old CLI result carried forward, another model, missing provenance or coverage, a source edit and an overrun", async () => {
+  const cases = [
+    ["the CLI transcript carried forward", t => ({ ...t, schema: "ophanim.review-transcript/v2-subscription", via: "subscription", transport: "grok-cli", prompt: { ...t.prompt, harness_cli_template: { sha256: JB.brief.files["HARNESS-cli.md"] } } }),
+      /the transcript's via is subscription, not api \(route xai-sdk\)/],
+    ["the fetch route", t => ({ ...t, transport: undefined }), /the transcript's transport is none, not xai-sdk/],
+    ["another transport", t => ({ ...t, transport: "grok-cli" }), /the transcript's transport is grok-cli, not xai-sdk/],
+    ["another requested model", t => ({ ...t, requested_model: "grok-4.6" }), /the transcript's model is grok-4\.6, not the bound grok-4\.7/],
+    ["another served model", t => ({ ...t, served_models: ["grok-4.7", "grok-3"] }), /a response was served by grok-3, not the bound grok-4\.7/],
+    ["no served-model evidence", t => ({ ...t, served_models: [null] }), /missing provenance: a response named no served model/],
+    ["no served models at all", t => ({ ...t, served_models: [] }), /missing provenance: no response named a served model/],
+    ["the coverage gate failed", t => ({ ...t, status: "incomplete", coverage: { ...t.coverage, tests_run: 0 }, coverage_gate: { ok: false, reasons: ["no test command ran although the testing limit allows tests"] } }),
+      /the coverage gate did not pass: no test command ran/],
+    ["no worktree check", t => ({ ...t, worktree_check: undefined }), /missing evidence: the transcript records no check of the review copy/],
+    ["a source edit", t => ({ ...t, worktree_check: { changed: ["ophanim/operate/stages.mjs"], violations: ["ophanim/operate/stages.mjs"] } }), /the review copy changed outside \.review-tests\/: ophanim\/operate\/stages\.mjs/],
+    ["another brief's harness", t => ({ ...t, prompt: { ...t.prompt, harness_template: { sha256: "9".repeat(64) } } }), /the prompt's harness is not the bound HARNESS\.md/],
+    ["other limits", t => ({ ...t, limits: { ...t.limits, max_turns: 50 } }), /the run's limits are not the bound limits \(max_turns 50 vs 8\)/],
+    ["more calls than the limit", t => ({ ...t, provider_calls: 9 }), /9 provider calls exceed the bound max_turns 8/],
+  ];
+  for (const [name, edit, want] of cases) {
+    const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+    assert.equal(j.status, "incomplete", name);
+    assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
+  }
+  // And a legacy (subscription) reviewer is never satisfied by an SDK run either.
+  const j = await judgeReviewer({ binding: JB, reviewer: { lab: "xai", model: "grok-4.7" }, outDir: await sdkRun({ binding: JB }), run: OK_RUN });
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /the transcript's via is api, not subscription/);
+});
+
+test("XAI SDK ROUTE: a binding record may sit beside its brief under another name (binding-<name>.json), never elsewhere", async () => {
+  const f = await prFixture({ edit: b => { b.panel = [SDK_XAI, PANEL[1], PANEL[2]]; } });
+  await sh("git", ["-C", f.repo, "mv", `${DIR}/binding.json`, `${DIR}/binding-xai-sdk.json`]);
+  await sh("git", ["-C", f.repo, ...ID, "commit", "-qm", "rename the record"]);
+  const b = JSON.parse(await readFile(join(f.repo, DIR, "binding-xai-sdk.json"), "utf8"));
+  const v = await verifyBinding({ binding: b, bindingRel: `${DIR}/binding-xai-sdk.json`, repoRoot: f.repo, gitFn });
+  assert.ok(v.checks.find(c => c.check === "record beside its brief").ok);
+  const bad = await verifyBinding({ binding: b, bindingRel: `${DIR}/notes.json`, repoRoot: f.repo, gitFn });
+  assert.match(bad.checks.find(c => c.check === "record beside its brief").detail, /binding\.json or binding-<name>\.json/);
+});
+
+test("XAI SDK ROUTE: the complete coordinator path -- the routed xAI leg runs the REAL API runner on a scripted SDK, is judged complete; the subscription labs run as before", { skip: !(await sandboxAvailable("bwrap")).ok && "bwrap unavailable" }, async () => {
+  const f = await prFixture({ edit: b => { b.panel = [SDK_XAI, PANEL[1], PANEL[2]]; } });
+  const call = (id, name, args) => ({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
+  const turn = (calls, content = null, finish = "tool_calls") => ({ id: `c${Math.random()}`, model: "grok-4.7", usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    choices: [{ index: 0, finish_reason: finish, message: { role: "assistant", content, ...(calls ? { tool_calls: calls } : {}) } }] });
+  const steps = [
+    turn([call("t1", "read_file", { path: "a.txt" }), call("t2", "write_test", { name: "stop", content: 'import test from "node:test";\ntest("stops", () => {});\n' })]),
+    turn([call("t3", "run_tests", { files: [".review-tests/stop.test.mjs"] })]),
+    turn(null, "## Findings\n1. holds (a.txt:1)\n\n## Tests run\nnode --test .review-tests/stop.test.mjs: exit 0\n\n## Unresolved questions\nSDK-UNRESOLVED-MARKER\n\n## Blockers for merging\nnone\n", "stop"),
+  ];
+  const r = await run(f, { runnerScript: SDK_RUNNER, env: { XAI_API_KEY: "xai-FAKEKEY-0123456789abcdef", FAKE_XAI_STEPS: JSON.stringify(steps) } });
+  assert.equal(r.code, 0, r.o.err);
+  const xaiStart = r.probe.find(p => p.at === "start" && p.lab === "xai");
+  const val = k => xaiStart.argv[xaiStart.argv.indexOf(k) + 1];
+  assert.equal(val("--via"), "api"); assert.equal(val("--xai-transport"), "sdk"); assert.equal(val("--max-turns"), "8");
+  assert.deepEqual(r.probe.find(p => p.at === "client").opts, { apiKey: "<set>", baseURL: "https://api.x.ai/v1", maxRetries: 0, timeout: 120_000 });
+  assert.equal(r.probe.find(p => p.at === "end" && p.lab === "xai").sdk_calls, 3);
+  const result = JSON.parse(await readFile(join(r.releaseDir, "result.json"), "utf8"));
+  assert.equal(result.panel.status, "complete");
+  const x = result.reviewers.find(y => y.lab_key === "xai");
+  assert.equal(x.status, "complete", JSON.stringify(x.why));
+  assert.equal(x.route, "xai-sdk");
+  assert.equal(x.runner.transport, "xai-sdk");
+  assert.deepEqual(x.served_models, ["grok-4.7"]);
+  assert.equal(x.tests.tests_run, 1);
+  assert.match(x.reviewer_sections.unresolved_questions, /SDK-UNRESOLVED-MARKER/);
+  for (const lab of ["google", "openai"]) {
+    const s = r.probe.find(p => p.at === "start" && p.lab === lab);
+    assert.equal(s.argv[s.argv.indexOf("--via") + 1], "subscription", `${lab} keeps its subscription route`);
+    assert.equal(result.reviewers.find(y => y.lab_key === lab).status, "complete");
+  }
+  assert.ok(!JSON.stringify(result).includes("xai-FAKEKEY"), "the key is in no record");
+});
+
+test("XAI SDK ROUTE: the committed record for the fresh xAI leg of PR #84 binds the same PR, head, brief and other reviewers as binding.json; only xAI is routed", () => {
+  const dir = "docs/reviews/2026-11-21-pr84-account-refusal";
+  const legacy = JSON.parse(readFileSync(join(REAL_ROOT, dir, "binding.json"), "utf8"));
+  const b = JSON.parse(readFileSync(join(REAL_ROOT, dir, "binding-xai-sdk.json"), "utf8"));
+  assert.deepEqual(shapeProblems(b), []);
+  assert.deepEqual(panelProblems(b), []);
+  for (const k of ["schema", "repo", "pr", "base", "head", "brief", "author", "via", "telos"]) assert.deepEqual(b[k], legacy[k], k);
+  assert.deepEqual(b.panel.map(r => r.lab), legacy.panel.map(r => r.lab), "the same labs, in the same order");
+  const x = b.panel.find(r => r.lab === "xai");
+  assert.equal(x.route, "xai-sdk"); assert.equal(x.model, legacy.panel.find(r => r.lab === "xai").model);
+  for (const lab of ["google", "openai"]) assert.deepEqual(b.panel.find(r => r.lab === lab), legacy.panel.find(r => r.lab === lab), `${lab} keeps its route`);
+  assert.ok(BINDING_NAME_RE.test("binding-xai-sdk.json"));
 });

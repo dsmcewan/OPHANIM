@@ -1,0 +1,61 @@
+{
+  "schema": "ophanim.pr-review/v1",
+  "purpose": "The xAI leg of the independent review of PR #84, as a FRESH run over the official SDK (owner assignment 2026-11-22: implemented by Claude, instructed and independently tested by Codex). Same PR, head, brief and panel as binding.json; only the xAI reviewer is routed. The earlier subscription CLI run of the xAI leg stopped partial (a cancelled write, no test run, coverage gate failed) and is NOT carried forward. The merge decision is the owner’s.",
+  "repo": "dsmcewan/OPHANIM",
+  "pr": 84,
+  "base": {
+    "ref": "main",
+    "merge_base": "ba3f03862f3e452f4db4f5891a1c288ebbc5cc6e",
+    "note": "the merge base of the head with main when this record was bound (main was then 4e5cdd2a8cc7ae0cd665f3c6c481e42c79f5340c); the PR is judged against it"
+  },
+  "head": {
+    "ref": "ccr-aa24f0d5-336szn",
+    "sha": "b42c49e99f5140eb2e616af7694f943d5b9d0420"
+  },
+  "brief": {
+    "dir": "docs/reviews/2026-11-21-pr84-account-refusal",
+    "assignment": 1,
+    "files": {
+      "README.md": "d8645b778efebbd5b60dd9e325ba391672a4551580a93ee602c7f86c18e12a4d",
+      "1-account-refusal.md": "e25c85f98ddc6e74c84f379097d4f153fcdeada7e1852e83ac45608fee7269c8",
+      "HARNESS.md": "e5eb44e00b3cb83c561f1439d726fc25abb2e11cda960d07ea2fbdb42921d821",
+      "HARNESS-cli.md": "db5b9adb1d185ca03d43a81c1016370674969945cb39efa8d07c1e6b17f7ac90"
+    }
+  },
+  "author": {
+    "labs": [
+      "Anthropic"
+    ],
+    "note": "an Anthropic model wrote every commit of the PR; Anthropic does not review its own work"
+  },
+  "via": "subscription",
+  "panel": [
+    {
+      "lab": "xai",
+      "model": "grok-4.7",
+      "route": "xai-sdk",
+      "limits": {
+        "max_turns": 40,
+        "max_tool_calls": 80,
+        "max_output_tokens": 16000,
+        "timeout_s": 300
+      },
+      "note": "the API runner over the openai SDK at https://api.x.ai/v1 (pantheon/src/review-runner/index.mjs, --via api --xai-transport sdk): its own tool loop and verify-jailed tests, the coverage gate, no SDK retries; judged on the API transcript (pr-review.mjs routedProblems). grok-4.7 publishes no output ceiling here (capability-facts: UNRECORDED), so max_output_tokens is a declared bound, not a cited one"
+    },
+    {
+      "lab": "google",
+      "model": "gemini-4-carbon"
+    },
+    {
+      "lab": "openai",
+      "model": "gpt-6-astra",
+      "tests": "relayed: Codex, on the owner’s subscription, picks an authorized test; the runner runs it in its verify jail on the review copy of the head and returns the result for Codex to judge (pantheon/src/review-runner/relay.mjs). Codex’s own sandbox cannot start the verify jail (register L-404)."
+    }
+  ],
+  "telos": {
+    "ci_pin": "0c9b539ddbb08e1464603faf786e0d5cdfc33fb8",
+    "note": "the TELOS commit CI pins; the owner’s configured checkout is used and its head is recorded against this"
+  },
+  "bound_on": "2026-11-22",
+  "bound_by": "the coordinator (an Anthropic model): it binds and dispatches, and never reviews or merges"
+}

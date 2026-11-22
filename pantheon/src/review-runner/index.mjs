@@ -26,6 +26,45 @@ import { VENDORS, authHeaders, createConversation, addUsage, redact } from "./ve
 import { subscriptionMain, TRANSPORT_FOR } from "./subscription.mjs";
 import { CONTINUE_NOTE, ContinueRefusal, preserveFiles, RESULT_CAP, captureReviewTests, cumulative, loadContinuation, replayApi, restoreReviewTests } from "./continue.mjs";
 import { repoMutex } from "../pipeline/git.mjs";
+import { compareWorktree, worktreeState } from "./cli-common.mjs";
+
+// THE xAI SDK ROUTE (`--via api --xai-transport sdk`; owner assignment 2026-11-22, the xAI leg of the PR #84 review). The
+// reviewer's Chat Completions requests go through the official `openai` JavaScript SDK pointed at xAI, instead of this
+// runner's own fetch. Everything else is this runner's: the same request bodies (vendors.mjs xaiConversation), the same
+// tool loop and verify-jailed tests, the same coverage gate, the same bounds. What the route adds:
+//   - the client is built ONLY for https://api.x.ai/v1, with the SDK's own retries OFF (maxRetries 0), so this runner's
+//     one retry of a 429/5xx, inside --max-turns, is the only retry; the SDK's timeout is the per-call --timeout-s, and
+//     every call also carries an abort signal at that timeout;
+//   - --max-wall-s is required: the whole run's wall clock, checked before every provider call;
+//   - every SDK failure or timeout is a recorded outcome (the call's event names the SDK error type and status);
+//   - the cost of each call is recorded as REPORTED (the field and its value, a zero included) or UNAVAILABLE (null),
+//     never a zero for a reading the provider did not give;
+//   - the review copy is checked before and after the run (cli-common.mjs compareWorktree): a change outside
+//     .review-tests/ is a policy violation and the review is incomplete;
+//   - the transcript records the transport, the SDK and the bound brief's digests (README, assignment, HARNESS.md), which
+//     the PR-review coordinator compares with its binding (pr-review.mjs judgeReviewer);
+//   - --continue refuses a transcript of another transport, in either direction.
+const OPENAI_SDK_PACKAGE = JSON.parse(await readFile(new URL("../../node_modules/openai/package.json", import.meta.url), "utf8").catch(() => "{}"));
+export const XAI_SDK = Object.freeze({ package: "openai", version: OPENAI_SDK_PACKAGE.version ?? null, base_url: "https://api.x.ai/v1", method: "chat.completions.create",
+  request_path: "/v1/chat/completions", max_retries: 0 });
+export const XAI_TRANSPORTS = Object.freeze({ http: null, sdk: "xai-sdk" });
+/** The default client: `new OpenAI(opts)` from the pinned `openai` package (pantheon/package.json). */
+async function defaultXaiClient(opts) {
+  const { default: OpenAI } = await import("openai");
+  return new OpenAI(opts);
+}
+/** A call's cost reading: the first numeric field of its usage whose name says cost, or unavailable. */
+export function costOf(usage) {
+  if (usage && typeof usage === "object") for (const [k, v] of Object.entries(usage)) if (/cost/i.test(k) && typeof v === "number" && Number.isFinite(v)) return { reported: true, value: v, field: k };
+  return { reported: false, value: null, field: null };
+}
+/** The run's cost: the sum over the calls that reported one (in their one field), and how many reported none. */
+export function costTotals(events) {
+  const costs = events.filter(e => e.type === "provider_call" && e.cost).map(e => e.cost);
+  const rep = costs.filter(c => c.reported), fields = [...new Set(rep.map(c => c.field))];
+  return { reported_calls: rep.length, unreported_calls: costs.length - rep.length,
+    value: rep.length && fields.length === 1 ? rep.reduce((s, c) => s + c.value, 0) : null, field: fields.length === 1 ? fields[0] : fields.length ? "mixed" : null };
+}
 
 export const EXIT = { complete: 0, refused: 1, usage: 2, incomplete: 3 };
 export const PLAN_SCHEMA = "ophanim.review-run-plan/v1";
@@ -82,6 +121,7 @@ function parseCli(argv) {
       "grok-state-dir": { type: "string" }, continue: { type: "string" }, "codex-cli": { type: "string" }, "grok-cli": { type: "string" }, "agy-cli": { type: "string" },
       reviewer: { type: "string" }, "codex-outer-runtime": { type: "string" }, "grok-permissions-inspect": { type: "string" },
       "gemini-api-primary": { type: "string" }, "metered-gemini-failover": { type: "string" }, "review-dir": { type: "string" },
+      "xai-transport": { type: "string" },
     } }).values;
   } catch (e) { throw new UsageError(e.message); }
   // THE BILLING POLICY, resolved before anything is read or run (see the header): malformed or unbudgeted is a usage error.
@@ -99,12 +139,20 @@ function parseCli(argv) {
   const subOnly = ["max-wall-s", "allow-api-key-in-cli", "skip-model-check", "grok-state-dir", "codex-cli", "grok-cli", "agy-cli", "codex-outer-runtime", "grok-permissions-inspect"];
   if (v["codex-outer-runtime"] !== undefined && !["auto", "on", "off"].includes(v["codex-outer-runtime"])) throw new UsageError("--codex-outer-runtime must be auto, on or off");
   if (v["grok-permissions-inspect"] !== undefined && !/^[A-Za-z0-9][A-Za-z0-9 ._=-]*$/.test(v["grok-permissions-inspect"])) throw new UsageError("--grok-permissions-inspect takes the Grok CLI arguments of its permission inspection, space-separated (letters, digits, . _ = -)");
+  if (v["xai-transport"] !== undefined && v.via !== "api") throw new UsageError("--xai-transport applies to --via api only");
+  if (v["xai-transport"] !== undefined && !Object.hasOwn(XAI_TRANSPORTS, v["xai-transport"])) throw new UsageError(`--xai-transport must be ${Object.keys(XAI_TRANSPORTS).join(" or ")}`);
+  const xaiTransport = XAI_TRANSPORTS[v["xai-transport"] ?? "http"];
   if (v.via === "api") {
     for (const k of ["max-turns", "max-tool-calls", "max-output-tokens", "timeout-s"]) {
       if (v[k] === undefined) throw new UsageError(`--${k} is required (there are no defaults; the owner chooses the spend)`);
       limits[k.replace(/-/g, "_")] = int(k);
     }
-    for (const k of subOnly) if (v[k] !== undefined) notes.push(`--${k} applies to --via subscription only; ignored`);
+    // The SDK route is bounded as a whole too: its wall clock, checked before every provider call (see the header).
+    if (xaiTransport) {
+      if (v["max-wall-s"] === undefined) throw new UsageError("--max-wall-s is required with --xai-transport sdk (the whole run's wall clock; there is no default)");
+      limits.max_wall_s = int("max-wall-s");
+    }
+    for (const k of subOnly) if (v[k] !== undefined && !(xaiTransport && k === "max-wall-s")) notes.push(`--${k} applies to --via subscription only; ignored`);
   } else {
     if (v["max-wall-s"] === undefined) throw new UsageError("--max-wall-s is required with --via subscription (there are no defaults; it is the whole run's wall clock)");
     limits.max_wall_s = int("max-wall-s");
@@ -119,7 +167,7 @@ function parseCli(argv) {
   return { via: v.via, n: Number(v.assignment), commit: v.commit, reviewDir: v["review-dir"] ?? REVIEW_DIR, limits, notes, ignoredCaps, out: v.out ?? null, dryRun: !!v["dry-run"], keep: !!v.keep, force: !!v.force, telosRoot: v["telos-root"] ?? null,
     allowApiKeyInCli: !!v["allow-api-key-in-cli"], skipModelCheck: !!v["skip-model-check"], grokStateDir: v["grok-state-dir"] ?? null,
     codexCli: v["codex-cli"] ?? null, grokCli: v["grok-cli"] ?? null, agyCli: v["agy-cli"] ?? null, continue: v.continue ?? null, reviewer,
-    codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null, billing };
+    codexOuterRuntime: v["codex-outer-runtime"] ?? "auto", grokPermissionsInspect: v["grok-permissions-inspect"] ? v["grok-permissions-inspect"].trim().split(/ +/) : null, billing, xaiTransport };
 }
 
 // --reviewer <lab>:<model>: the lab names the vendor exactly as the README table's labs do (brief.mjs LAB_TO_VENDOR).
@@ -175,6 +223,7 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
   const { files, b, row, listed, permissions } = await loadAssignment(opts, { repoRoot, env, harnessValues });
   const fileTesting = testingLine(b.assignmentText);
   const tools = toolDefinitions(permissions);
+  if (opts.xaiTransport && row.vendor !== "xai") throw new UsageError(`--xai-transport sdk is for an xAI reviewer; this run's reviewer is ${row.lab} (${row.model})`);
 
   const cited = CAPABILITY_FACTS.models?.[row.model]?.output?.value ?? null;
   if (Number.isSafeInteger(cited) && limits.max_output_tokens > cited) {
@@ -202,6 +251,7 @@ export async function buildPlan(opts, { repoRoot, env, cwd = process.cwd() }) {
     model_facts: { cited_max_output: cited, reasoning_effort_sent: null },
     commit,
     endpoint: row.vendor === "gemini" ? vendor.endpoint.replace("<model>", row.model) : vendor.endpoint,
+    ...(opts.xaiTransport ? { transport: opts.xaiTransport, sdk: { ...XAI_SDK } } : {}),
     request: {
       harness_template: { path: `${reviewDir}/HARNESS.md`, bytes: Buffer.byteLength(b.harnessTemplate), sha256: sha256(b.harnessTemplate) },
       system: { bytes: Buffer.byteLength(b.system), sha256: sha256(b.system), text: b.system },
@@ -260,6 +310,14 @@ export async function main(argv, deps = {}) {
   }
   let resume = null;
   if (opts.continue) {
+    // A continuation is of the SAME transport only (see the header): the CLI's result, or the fetch route's, is never
+    // carried into an SDK run, nor an SDK run's into the fetch route. Read before anything else is compared.
+    const cpath = resolve(deps.cwd ?? process.cwd(), opts.continue);
+    const prior = await readFile(cpath, "utf8").then(JSON.parse, () => null);
+    if (prior && (prior.via ?? "api") === "api" && (prior.transport ?? null) !== (plan.transport ?? null)) {
+      err(`run-review: refused: --continue ${opts.continue}: its transport is ${prior.transport ?? "the runner's own fetch"}, not ${plan.transport ?? "the runner's own fetch"}; a review continues on the transport it started on\n`);
+      return EXIT.refused;
+    }
     try {
       resume = await loadContinuation(resolve(deps.cwd ?? process.cwd(), opts.continue), { n: opts.n, lab: plan.lab.toLowerCase(), vendor: plan.vendor, model: plan.model, commit: plan.commit, via: "api", brief_sha256: plan.request.brief.sha256, reviewer: plan.reviewer_override ? plan.reviewer : null });
     } catch (e) { if (e instanceof ContinueRefusal) { err(`run-review: refused: ${e.message}\n`); return EXIT.refused; } throw e; }
@@ -307,6 +365,8 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     endpoint: plan.endpoint,
     hashes: { harness_template: plan.request.harness_template.sha256, system: plan.request.system.sha256, brief: plan.request.brief.sha256, tools: plan.request.tools.sha256 },
     via: "api", limits: opts.limits, started_at: started.toISOString(), gemini_billing: null,
+    ...(plan.transport ? { transport: plan.transport, sdk: plan.sdk,
+      prompt: { readme_sha256: plan.request.brief.parts.readme_sha256, assignment_sha256: plan.request.brief.parts.assignment_sha256, harness_template: { path: plan.request.harness_template.path, sha256: plan.request.harness_template.sha256 } } } : {}),
     // A continuation carries the earlier run's events first (they are what a later --continue replays), then its own.
     events: resume ? [...(resume.t.events ?? [])] : [],
     ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method: plan.continue.method } } : {}),
@@ -330,6 +390,12 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
       for (const d of ["node_modules", "pantheon/node_modules", "packages/model-client/node_modules", "packages/ledger/node_modules"]) {
         if (await exists(join(repoRoot, d))) await cp(join(repoRoot, d), join(wt, d), { recursive: true, verbatimSymlinks: true });
       }
+    }
+    // The SDK route: the review copy as git sees it before the reviewer starts, and the one client of the run.
+    if (plan.transport === "xai-sdk") {
+      state.wtBefore = await worktreeState(a => git(wt, a, env));
+      const make = deps.xaiClient ?? defaultXaiClient;
+      state.xai = await make({ apiKey: key, baseURL: XAI_SDK.base_url, maxRetries: XAI_SDK.max_retries, timeout: timeoutMs });
     }
     const childEnv = buildChildEnv({ parentEnv: env, home, tmpdir: childTmp, telosRoot: opts.telosRoot, secrets });
     const toolbox = createToolbox({ root: wt, permissions: plan.tool_permissions, env: childEnv, timeoutMs, telosRoot: opts.telosRoot ?? null, ...(deps.bwrap ? { bwrap: deps.bwrap } : {}) });
@@ -378,6 +444,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     outer: for (;;) {
       if (stopped) break;
       if (state.providerCalls >= opts.limits.max_turns) { state.stop = `max_turns reached (${opts.limits.max_turns})`; break; }
+      if (opts.limits.max_wall_s && now() - started >= opts.limits.max_wall_s * 1000) { state.stop = `max_wall_s reached (${opts.limits.max_wall_s})`; break; }
       turn++;
       const req = conv.request();
       const res = await providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, opts, transcript, secrets, turn, billing });
@@ -402,6 +469,10 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   } catch (e) {
     state.stop = `runner error: ${redact(e.message, secrets)}`;
   } finally {
+    if (worktreeAdded && state.wtBefore) {
+      const after = await worktreeState(a => git(wt, a, env)).catch(() => ({ head: null, entries: new Map(), ok: false }));
+      state.worktree_check = compareWorktree(state.wtBefore, after, { write_allowed: plan.tool_permissions.tools.includes("write_test") });
+    }
     // What the reviewer wrote under .review-tests/, in full (capped), so a later --continue can restore it.
     if (worktreeAdded) state.review_tests = await captureReviewTests(wt).catch(e => ({ captured: false, why: e.message }));
     if (worktreeAdded && !opts.keep) {
@@ -424,13 +495,17 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
   const coverage = coverageOfApi(transcript.events, { tests_allowed: testsAllowedBy(plan.tool_permissions) });
   const gate = coverageGate(coverage);
   const gated = gatedStatus(state.final !== null ? "complete" : "incomplete", state.stop, gate);
-  const status = gated.status;
+  let status = gated.status;
   state.stop = gated.stop_reason;
+  // The SDK route: a change to the review copy outside .review-tests/ (or a check that could not run) is a policy
+  // violation, and the review is not complete (see the header).
+  if (state.worktree_check?.violations.length) { status = "incomplete"; state.stop = `policy violation: the review copy changed outside .review-tests/: ${state.worktree_check.violations.join(", ")}`; }
   const servedFinal = state.served.at(-1) ?? null;
   const distinctServed = [...new Set(state.served.map(s => s ?? null))];
   Object.assign(transcript, {
     ended_at: ended.toISOString(), status, stop_reason: state.stop, coverage, coverage_gate: gate, provider_calls: state.providerCalls, tool_calls: state.toolCalls,
     served_models: distinctServed, usage_totals: state.usage, worktree_kept: opts.keep ? wt : null,
+    ...(plan.transport ? { cost_totals: costTotals(transcript.events), worktree_check: state.worktree_check ?? null } : {}),
     // The policy, every billed Gemini request (recorded before it was sent) and every refusal of this run (L-136).
     gemini_billing: billingRecord(billing),
     review_tests: state.review_tests ?? { captured: false, why: "no worktree was created" },
@@ -455,6 +530,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     `- coverage: ${coverageHeaderLine(coverage, gate)}`,
     `- lab: ${plan.lab}`,
     `- requested_model: \`${plan.model}\``,
+    ...(plan.transport ? [`- transport: ${plan.transport} (${plan.sdk.package}@${plan.sdk.version}, ${plan.sdk.method} at ${plan.sdk.base_url}; SDK retries off)`] : []),
     ...reviewerHeaderLines(plan),
     `- served_model: ${servedFinal === null ? "null (the provider's response named no served model; the requested name is not substituted)" : `\`${servedFinal}\``}`,
     ...(distinctServed.length > 1 ? [`- served_models_across_calls: ${distinctServed.map(s => s === null ? "null" : `\`${s}\``).join(", ")}`] : []),
@@ -465,6 +541,7 @@ async function liveRun({ plan, opts, key, env, deps, resume = null }) {
     ...(plan.vendor === "gemini" ? [`- gemini_billing: gemini_api_primary ${opts.billing.gemini_api_primary.enabled ? `enabled, budget ${opts.billing.gemini_api_primary.budget}` : "off"} (${opts.billing.gemini_api_primary.source}); billed requests this run: ${billing.rows.length}; refused: ${billing.refusals.length}`] : []),
     `- tool_calls: ${state.toolCalls}`,
     `- usage_totals: \`${JSON.stringify(state.usage)}\``,
+    ...(plan.transport ? [`- cost: ${costLine(transcript.cost_totals)}`, `- worktree_check: ${transcript.worktree_check ? (transcript.worktree_check.violations.length ? `violations: ${transcript.worktree_check.violations.join(", ")}` : "no change outside .review-tests/") : "not run"}`] : []),
     `- limits: \`${JSON.stringify(opts.limits)}\``,
     `- transcript: \`${plan.out.transcript.split(/[\\/]/).pop()}\` sha256 \`${sha256(tBytes)}\``,
     `- harness_template_sha256: \`${plan.request.harness_template.sha256}\``,
@@ -510,6 +587,34 @@ async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, 
       ...(gemini ? { gemini: { kind: gemini.kind, setting: gemini.setting, source: gemini.source, budget: gemini.budget, used_before: gemini.used_before, remaining_after: gemini.remaining_after } } : {}) };
     transcript.events.push(ev);
     const t0 = Date.now();
+    if (plan.transport === "xai-sdk") {
+      ev.transport = "xai-sdk";
+      let json;
+      try { json = await state.xai.chat.completions.create(req.body, { signal: AbortSignal.timeout(timeoutMs) }); }
+      catch (e) {
+        ev.duration_ms = Date.now() - t0;
+        // The SDK names its errors by class (RateLimitError, APIConnectionTimeoutError, ...) and leaves `name` as "Error".
+        const cls = e?.constructor?.name;
+        ev.sdk_error = cls && cls !== "Error" ? cls : (e?.name ?? "Error");
+        const status = Number.isInteger(e?.status) ? e.status : null;
+        ev.error = clip(redact(e?.error?.message ?? e?.message ?? String(e), secrets), 500);
+        if (status === null) return { ok: false, reason: `network error: ${ev.sdk_error}: ${ev.error}` };
+        ev.http_status = status;
+        if ((status === 429 || status >= 500) && attempt === 1 && state.providerCalls < opts.limits.max_turns) {
+          const h = e?.headers, raw = typeof h?.get === "function" ? h.get("retry-after") : h?.["retry-after"];
+          const ra = Number(raw), wait = Number.isFinite(ra) && ra > 0 ? Math.min(ra, 60) * 1000 : 5000;
+          ev.retry_after_ms = wait;
+          await sleep(wait);
+          continue;
+        }
+        return { ok: false, reason: `HTTP ${status}: ${ev.error}` };
+      }
+      ev.duration_ms = Date.now() - t0;
+      ev.usage = json?.usage ?? null;
+      ev.cost = costOf(ev.usage);
+      ev.response = json;
+      return { ok: true, json };
+    }
     let resp;
     try {
       resp = await fetchFn(req.url, { method: "POST", headers: { "content-type": "application/json", ...authHeaders(plan.vendor, key) }, body, signal: AbortSignal.timeout(timeoutMs) });
@@ -543,6 +648,11 @@ async function providerCall({ req, plan, key, fetchFn, sleep, timeoutMs, state, 
   }
 }
 
+function costLine(c) {
+  if (!c || !c.reported_calls) return "unavailable (no call reported a cost)";
+  const v = c.value === null ? `not summed (fields: ${c.field})` : `${c.value} ${c.field}`;
+  return `${v} over ${c.reported_calls} call(s) that reported one${c.unreported_calls ? `; ${c.unreported_calls} call(s) reported none` : ""}`;
+}
 function clip(s, n) {
   s = String(s ?? "");
   return Buffer.byteLength(s) <= n ? s : `${Buffer.from(s).subarray(0, n).toString("utf8")}… (${Buffer.byteLength(s)} bytes, truncated)`;

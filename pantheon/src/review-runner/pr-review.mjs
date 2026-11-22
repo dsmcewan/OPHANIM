@@ -34,6 +34,14 @@
 //      its status and reasons, the runner's own record of what ran (coverage, review_tests), the files and their
 //      sha256, and the reviewer's own "Tests run", "Unresolved questions" and "Blockers for merging" sections. The
 //      findings-* path is withheld from every later review copy (index.mjs WITHHELD).
+// THE xAI SDK ROUTE (owner assignment 2026-11-22): a panel entry may carry `route: "xai-sdk"` (the xAI lab only) with its
+// declared `limits` ({max_turns, max_tool_calls, max_output_tokens, timeout_s}). That reviewer runs through the API runner
+// over the official SDK (run-review.mjs --via api --xai-transport sdk, with those limits and --max-wall-s), and is judged
+// on the API transcript: via api, transport xai-sdk, every served model the bound one, the bound README, assignment and
+// HARNESS.md, the coverage gate, no change to the review copy outside .review-tests/, and its calls within the bound
+// limits. A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
+// route dispatch and are judged exactly as before; the panel's independence rules are unchanged. A record may sit beside
+// its brief as binding.json or binding-<name>.json (a fresh leg keeps the earlier record intact).
 // The merge decision is never taken here: the result says so. Exit codes: 0 every reviewer complete (or a dry run whose
 // plans all passed), 1 refused (a binding failed), 2 usage, 3 at least one review incomplete.
 import { spawn } from "node:child_process";
@@ -58,6 +66,11 @@ export const REQUIRED_SECTIONS = Object.freeze(["tests_run", "unresolved_questio
 export const HOST_FLAGS = Object.freeze(["grok-state-dir", "agy-cli", "grok-cli", "codex-cli", "codex-outer-runtime"]);
 /** Beyond --max-wall-s, how long a runner may take (preflights, the review copy, its own teardown) before it is killed. */
 export const DEFAULT_GRACE_MS = 15 * 60 * 1000;
+/** The routes a panel entry may name, the lab each is for, and the limits it must declare (each a whole number up to its cap). */
+export const ROUTES = Object.freeze({ "xai-sdk": { lab: "xai", transport: "xai-sdk" } });
+export const ROUTE_LIMITS = Object.freeze({ max_turns: 200, max_tool_calls: 400, max_output_tokens: 128000, timeout_s: 3600 });
+/** The record's file name beside its brief. */
+export const BINDING_NAME_RE = /^binding(-[a-z0-9][a-z0-9-]{0,62})?\.json$/;
 const STAGE_ROOT = "/tmp";
 
 const HEX40 = /^[0-9a-f]{40}$/, HEX64 = /^[0-9a-f]{64}$/;
@@ -107,6 +120,13 @@ export function shapeProblems(b) {
   for (const r of b.panel ?? []) {
     if (!LABS[r?.lab]) p.push(`panel: lab ${JSON.stringify(r?.lab)} is not one of ${Object.keys(LABS).join(", ")}`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r?.model ?? "")) p.push(`panel: model ${JSON.stringify(r?.model)} is not a model id`);
+    if (r?.route === undefined) { if (r?.limits !== undefined) p.push("panel: limits apply to a routed reviewer only"); continue; }
+    const route = ROUTES[r.route];
+    if (!route) { p.push(`panel: route ${JSON.stringify(r.route)} is not a route (${Object.keys(ROUTES).join(", ")})`); continue; }
+    if (r.lab !== route.lab) p.push(`panel: route ${r.route} is for the ${route.lab} lab only`);
+    if (!r.limits || typeof r.limits !== "object" || Array.isArray(r.limits)) { p.push(`panel: route ${r.route} must declare limits (${Object.keys(ROUTE_LIMITS).join(", ")})`); continue; }
+    for (const k of Object.keys(r.limits)) if (!Object.hasOwn(ROUTE_LIMITS, k)) p.push(`panel: limits has an unknown key ${JSON.stringify(k)}`);
+    for (const [k, cap] of Object.entries(ROUTE_LIMITS)) if (!Number.isSafeInteger(r.limits[k]) || r.limits[k] < 1 || r.limits[k] > cap) p.push(`panel: limits.${k} must be a whole number from 1 to ${cap}`);
   }
   return p;
 }
@@ -140,7 +160,8 @@ export async function verifyBinding({ binding: b, bindingRel, repoRoot, gitFn = 
   const g = (...a) => gitFn(repoRoot, a);
   const dir = b.brief.dir, files = briefNames(b).map(f => `${dir}/${f}`);
 
-  add("record beside its brief", bindingRel === `${dir}/binding.json`, bindingRel === `${dir}/binding.json` ? `${bindingRel}` : `the record is ${bindingRel}; it must be ${dir}/binding.json, in the brief's own directory`);
+  const beside = bindingRel.startsWith(`${dir}/`) && BINDING_NAME_RE.test(bindingRel.slice(dir.length + 1));
+  add("record beside its brief", beside, beside ? `${bindingRel}` : `the record is ${bindingRel}; it must be ${dir}/binding.json or binding-<name>.json, in the brief's own directory`);
 
   const tracked = await g("ls-files", "--error-unmatch", "--", bindingRel, ...files);
   const clean = await g("diff", "--quiet", "HEAD", "--", bindingRel, ...files);
@@ -208,11 +229,15 @@ export async function verifyBinding({ binding: b, bindingRel, repoRoot, gitFn = 
 
 /** The run-review argv for one reviewer (after the script path). */
 export function runnerArgs({ binding: b, reviewer, readmeRow, telosRoot, maxWallS, out, dryRun, hostFlags = {} }) {
-  const a = ["--via", "subscription", "--review-dir", b.brief.dir, "--assignment", String(b.brief.assignment), "--commit", b.head.sha,
+  // A routed reviewer (xai-sdk) runs the API runner over the SDK with its bound limits; every other one, its subscription.
+  const routed = reviewer.route === "xai-sdk", L = reviewer.limits ?? {};
+  const a = ["--via", routed ? "api" : "subscription", ...(routed ? ["--xai-transport", "sdk"] : []), "--review-dir", b.brief.dir, "--assignment", String(b.brief.assignment), "--commit", b.head.sha,
+    ...(routed ? ["--max-turns", String(L.max_turns), "--max-tool-calls", String(L.max_tool_calls), "--max-output-tokens", String(L.max_output_tokens), "--timeout-s", String(L.timeout_s)] : []),
     "--max-wall-s", String(maxWallS), "--telos-root", telosRoot, "--out", out];
   const isDefault = readmeRow && readmeRow.lab.toLowerCase() === LABS[reviewer.lab].toLowerCase() && readmeRow.model === reviewer.model;
   if (!isDefault) a.push("--reviewer", `${reviewer.lab}:${reviewer.model}`);
-  for (const k of HOST_FLAGS) if (hostFlags[k] !== undefined) a.push(`--${k}`, hostFlags[k]);
+  // The subscription host flags configure the CLIs; a routed reviewer runs none.
+  if (!routed) for (const k of HOST_FLAGS) if (hostFlags[k] !== undefined) a.push(`--${k}`, hostFlags[k]);
   if (dryRun) a.push("--dry-run");
   return a;
 }
@@ -293,13 +318,15 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     if (t.commit !== b.head.sha) why.push(`the transcript reviewed ${t.commit ?? "no commit"}, not the bound head ${b.head.sha}`);
     if (t.requested_model !== reviewer.model) why.push(`the transcript's model is ${t.requested_model ?? "none"}, not the bound ${reviewer.model}`);
     if (t.lab !== lab) why.push(`the transcript's lab is ${t.lab ?? "none"}, not ${lab}`);
-    if (t.via !== "subscription") why.push(`the transcript's via is ${t.via ?? "none"}, not subscription`);
-    if (t.identity_mismatch) why.push("the CLI reported another model than the one asked for (identity_mismatch)");
+    // Entries without a route: exactly the checks, in the order, they had before the route existed.
+    if (!reviewer.route && t.via !== "subscription") why.push(`the transcript's via is ${t.via ?? "none"}, not subscription`);
+    if (!reviewer.route && t.identity_mismatch) why.push("the CLI reported another model than the one asked for (identity_mismatch)");
     const pr = t.prompt ?? {};
     const assignmentFile = briefNames(b).find(f => /^\d-/.test(f));
     if (pr.readme_sha256 !== b.brief.files["README.md"]) why.push("the prompt's README is not the bound README");
     if (pr.assignment_sha256 !== b.brief.files[assignmentFile]) why.push("the prompt's assignment is not the bound assignment file");
-    if (pr.harness_cli_template?.sha256 !== b.brief.files["HARNESS-cli.md"]) why.push("the prompt's harness is not the bound HARNESS-cli.md");
+    if (!reviewer.route && pr.harness_cli_template?.sha256 !== b.brief.files["HARNESS-cli.md"]) why.push("the prompt's harness is not the bound HARNESS-cli.md");
+    if (reviewer.route) why.push(...routedProblems(t, reviewer, b));
   }
   const sections = findings === null ? { found_marker: false, tests_run: null, unresolved_questions: null, blockers_for_merging: null } : reviewerSections(findings);
   if (findings !== null && !sections.found_marker) why.push("missing evidence: the findings file has no reviewer message (no marker line)");
@@ -308,7 +335,8 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
   for (const p of await listFiles(outDir)) files.push({ path: relative(outDir, p), sha256: sha256(await readFile(p)), bytes: (await stat(p)).size });
   const cov = t?.coverage ?? null;
   return {
-    lab, lab_key: reviewer.lab, model: reviewer.model, status: why.length ? "incomplete" : "complete", why,
+    lab, lab_key: reviewer.lab, model: reviewer.model, ...(reviewer.route ? { route: reviewer.route, served_models: t?.served_models ?? null, cost_totals: t?.cost_totals ?? null, limits: reviewer.limits } : {}),
+    status: why.length ? "incomplete" : "complete", why,
     run: { exit_code: run.exit_code, signal: run.signal, killed_for: run.killed_for, spawn_error: run.spawn_error, started_at: run.started_at, ended_at: run.ended_at },
     runner: t ? { status: t.status ?? null, stop_reason: t.stop_reason ?? null, transport: t.transport ?? null, commit: t.commit ?? null, requested_model: t.requested_model ?? null } : null,
     tests: cov ? { tests_run: cov.tests_run ?? 0, tests_allowed: cov.tests_allowed ?? null, tests_refused: cov.tests_refused ?? null, source_reads: cov.source_reads ?? 0, denied_reads: cov.denied_reads ?? 0, method: cov.method ?? null } : null,
@@ -320,6 +348,25 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     reviewer_sections: { tests_run: sections.tests_run, unresolved_questions: sections.unresolved_questions, blockers_for_merging: sections.blockers_for_merging },
     files,
   };
+}
+
+/** What a routed reviewer's transcript must show beyond the common checks (see the header). */
+function routedProblems(t, reviewer, b) {
+  const why = [], route = ROUTES[reviewer.route], L = reviewer.limits ?? {};
+  if (t.via !== "api") why.push(`the transcript's via is ${t.via ?? "none"}, not api (route ${reviewer.route})`);
+  if (t.transport !== route.transport) why.push(`the transcript's transport is ${t.transport ?? "none"}, not ${route.transport}`);
+  if (t.prompt?.harness_template?.sha256 !== b.brief.files["HARNESS.md"]) why.push("the prompt's harness is not the bound HARNESS.md");
+  const served = Array.isArray(t.served_models) ? t.served_models : [];
+  if (!served.length) why.push("missing provenance: no response named a served model");
+  else if (served.includes(null)) why.push("missing provenance: a response named no served model");
+  for (const s of served) if (s !== null && s !== reviewer.model) why.push(`a response was served by ${s}, not the bound ${reviewer.model}`);
+  if (!t.worktree_check) why.push("missing evidence: the transcript records no check of the review copy");
+  else if (t.worktree_check.violations?.length) why.push(`the review copy changed outside .review-tests/: ${t.worktree_check.violations.join(", ")}`);
+  const diff = Object.keys(ROUTE_LIMITS).filter(k => t.limits?.[k] !== L[k]);
+  if (diff.length) why.push(`the run's limits are not the bound limits (${diff.map(k => `${k} ${t.limits?.[k] ?? "none"} vs ${L[k]}`).join(", ")})`);
+  if (Number.isInteger(t.provider_calls) && t.provider_calls > L.max_turns) why.push(`${t.provider_calls} provider calls exceed the bound max_turns ${L.max_turns}`);
+  if (Number.isInteger(t.tool_calls) && t.tool_calls > L.max_tool_calls) why.push(`${t.tool_calls} tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
+  return why;
 }
 
 async function underTmp(p) {
