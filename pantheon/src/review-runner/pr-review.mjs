@@ -377,10 +377,25 @@ function routedProblems(t, reviewer, b, readmeRow) {
   // THE ATTESTATION IS THE RAW PROVIDER RESPONSE'S MODEL (#118). The event's served_model is the producer's derived copy:
   // it never outranks the raw value, never stands in for a missing one, and contradicting it invalidates the evidence.
   for (const e of Array.isArray(t.events) ? t.events : []) {
-    // A call that recorded a response, or names a served model, is a served response; a failed attempt names neither.
-    const hasResponse = e?.response && typeof e.response === "object";
-    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;
+    // Each call is classified by its OWN positive evidence, never by the absence of another kind: a SUCCESS records a
+    // response object; an OBSERVED FAILURE records no response but the producer's explicit failure evidence (an error, or
+    // a non-2xx status) and claims no served model; anything else (a stripped event, a malformed response, a 2xx with
+    // no response) is invalid evidence.
+    if (e?.type !== "provider_call") continue;
+    const hasResponse = e.response !== null && typeof e.response === "object" && !Array.isArray(e.response);
     const turn = e.turn ?? "?";
+    // A recorded status must be an HTTP status (an integer 100-599); success and failure evidence on one call contradict.
+    const hasStatus = e.http_status !== undefined && e.http_status !== null;
+    const plausible = Number.isInteger(e.http_status) && e.http_status >= 100 && e.http_status <= 599;
+    if (hasStatus && !plausible) { why.push(`turn ${turn}: the recorded status ${e.http_status} is not an HTTP status`); continue; }
+    const failed = (typeof e.error === "string" && e.error.length > 0) || (plausible && (e.http_status < 200 || e.http_status > 299));
+    if (hasResponse && failed) { why.push(`turn ${turn}: the call records both a provider response and a failure (${plausible && (e.http_status < 200 || e.http_status > 299) ? `status ${e.http_status}` : "an error"})`); continue; }
+    const observedFailure = !Object.hasOwn(e, "response") && (e.served_model === undefined || e.served_model === null) && failed;
+    if (observedFailure) continue;
+    if (!hasResponse && (e.served_model === undefined || e.served_model === null)) {
+      why.push(`missing evidence: the provider call at turn ${turn} records neither a response nor an observed failure`);
+      continue;
+    }
     if (!hasResponse) {
       why.push(`missing provenance: the call at turn ${turn} claims served model ${e.served_model} with no recorded provider response`);
       if (e.served_model !== reviewer.model) why.push(`the recorded response at turn ${turn} was served by ${e.served_model}, not the bound ${reviewer.model}`);

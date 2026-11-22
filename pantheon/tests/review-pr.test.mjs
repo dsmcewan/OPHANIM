@@ -665,6 +665,65 @@ test("XAI SDK ROUTE #118: the judge attests a response by its raw provider model
 });
 
 
+test("XAI SDK ROUTE #118: a provider call is a success (a response object), an OBSERVED failure (error or a non-2xx status, no response), or invalid -- a stripped or malformed event is never taken as a failure by absence; real retries and a valid continuation still pass", async () => {
+  const verdict = async edit => judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+  const NO_OBSERVATION = /missing evidence: the provider call at turn 1 records neither a response nor an observed failure/;
+  // A plain invalid event: no response, no served model, no failure evidence.
+  let j = await verdict(t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1 }, ...OK_EVENTS()] }));
+  assert.equal(j.status, "incomplete", "a call with no observation at all");
+  assert.match(j.why.join("; "), NO_OBSERVATION);
+  // A malformed scalar response, its derived model removed.
+  j = await verdict(t => ({ ...t, events: [{ type: "provider_call", n: 1, turn: 1, attempt: 1, response: "oops" }, ...OK_EVENTS().slice(1)] }));
+  assert.equal(j.status, "incomplete", "a scalar response");
+  assert.match(j.why.join("; "), NO_OBSERVATION);
+  // A 2xx status with no response is no observed failure.
+  j = await verdict(t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 200 }, ...OK_EVENTS()] }));
+  assert.equal(j.status, "incomplete", "a 200 with no response");
+  // A carried event (before the continuation): a previously successful call stripped of its response and served model.
+  const prior = [{ type: "provider_call", n: 1, turn: 1, attempt: 1 }, tool(1, "read_file", { path: "ophanim/operate/a.mjs" }), tool(2, "read_file", { path: "ophanim/operate/b.mjs" }), tool(3, "read_file", { path: "ophanim/operate/c.mjs" })];
+  const now = [{ type: "continuation", from_sha256: "f".repeat(64), method: "replayed-history" }, served(2), tool(4, "run_tests", { files: [".review-tests/stop.test.mjs"] }), served(3)];
+  const cont = events => t => ({ ...t, events, continued_from: { transcript: "findings-1-xai.transcript.json", sha256: "f".repeat(64), method: "replayed-history" },
+    provider_calls: 2, tool_calls: 1, cumulative: { runs: 2, provider_calls: 3, tool_calls: 4, usage: {}, wall_s: 9 } });
+  j = await verdict(cont([...prior, ...now]));
+  assert.equal(j.status, "incomplete", "a carried call stripped of its response");
+  assert.match(j.why.join("; "), NO_OBSERVATION);
+  // Controls: observed failures are calls, not served responses -- a 429 with its error, and a network error with no status.
+  j = await verdict(t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 429, error: "rate limited", retry_after_ms: 1000 }, ...OK_EVENTS()] }));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  j = await verdict(t => ({ ...t, provider_calls: 4, events: [{ type: "provider_call", n: 0, turn: 1, attempt: 1, error: "socket hang up" }, ...OK_EVENTS()] }));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  // And the valid continuation, with the carried success intact.
+  j = await verdict(cont([served(1), ...prior.slice(1), ...now]));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
+
+test("XAI SDK ROUTE #118: success and failure evidence on one call contradict each other, and a recorded failure status must be a plausible HTTP status; a 429, a network error and a normal 200 success still pass", async () => {
+  const verdict = async edit => judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+  const first = e => t => ({ ...t, events: [e, ...OK_EVENTS().slice(1)] });
+  const extra = e => t => ({ ...t, provider_calls: 4, events: [e, ...OK_EVENTS()] });
+  // A response object together with a recorded 503: incomplete.
+  let j = await verdict(first({ ...served(1), http_status: 503 }));
+  assert.equal(j.status, "incomplete", "a response with a recorded 503");
+  assert.match(j.why.join("; "), /turn 1: the call records both a provider response and a failure/);
+  j = await verdict(first({ ...served(1), error: "upstream reset" }));
+  assert.equal(j.status, "incomplete", "a response with a recorded error");
+  // An impossible status with no response: incomplete.
+  j = await verdict(extra({ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: -1 }));
+  assert.equal(j.status, "incomplete", "status -1");
+  assert.match(j.why.join("; "), /turn 1: the recorded status -1 is not an HTTP status/);
+  j = await verdict(extra({ type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 999, error: "x" }));
+  assert.equal(j.status, "incomplete", "status 999, even with an error");
+  // Controls.
+  for (const [what, e] of [["429 with its error", { type: "provider_call", n: 0, turn: 1, attempt: 1, http_status: 429, error: "rate limited" }],
+    ["a network error, no status", { type: "provider_call", n: 0, turn: 1, attempt: 1, error: "socket hang up" }]]) {
+    j = await verdict(extra(e));
+    assert.equal(j.status, "complete", `${what}: ${JSON.stringify(j.why)}`);
+  }
+  j = await verdict(first({ ...served(1), http_status: 200 }));
+  assert.equal(j.status, "complete", `a normal 200 success: ${JSON.stringify(j.why)}`);
+});
+
+
 // ---- round 5 (Codex's independent pass at 8942598): the routed judge derives its counts and coverage from the events ---
 
 test("XAI SDK ROUTE R5: the three summary-over-facts cases are refused -- empty events, more calls than the counter (over the bound), a claimed test with no test event", async () => {
