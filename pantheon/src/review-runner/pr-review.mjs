@@ -370,8 +370,10 @@ function routedProblems(t, reviewer, b, readmeRow) {
   if (t.identity_mismatch) why.push("the runner refused a response served by another model (identity_mismatch)");
   // The facts behind the summary: every recorded response, an earlier run's included (a continuation carries them).
   for (const e of Array.isArray(t.events) ? t.events : []) {
-    if (e?.type !== "provider_call" || !e.response || typeof e.response !== "object") continue;
-    const s = e.served_model ?? e.response.model ?? null;
+    // A call that recorded a response, or names a served model, is a served response; a failed attempt names neither.
+    const hasResponse = e?.response && typeof e.response === "object";
+    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;
+    const s = e.served_model ?? (hasResponse ? e.response.model : null) ?? null;
     if (s === null) why.push(`missing provenance: the recorded response at turn ${e.turn ?? "?"} named no served model`);
     else if (s !== reviewer.model) why.push(`the recorded response at turn ${e.turn ?? "?"} was served by ${s}, not the bound ${reviewer.model}`);
   }

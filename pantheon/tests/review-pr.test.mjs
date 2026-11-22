@@ -614,11 +614,14 @@ test("XAI SDK ROUTE R4: a recorded response served by another model (or none) an
   for (const [name, events, want] of [
     ["a rejected response kept from an earlier run", [ev(1, "grok-4.6"), ev(2, "grok-4.7")], /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
     ["a recorded response naming no model", [ev(1), ev(2, "grok-4.7")], /missing provenance: the recorded response at turn 1 named no served model/],
+    ["a call naming another served model without its response body", [{ type: "provider_call", n: 1, turn: 1, served_model: "grok-4.6" }, ev(2, "grok-4.7")],
+      /the recorded response at turn 1 was served by grok-4\.6, not the bound grok-4\.7/],
   ]) {
     const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events }) }), run: OK_RUN });
     assert.equal(j.status, "incomplete", name);
     assert.match(j.why.join("; "), want, `${name}: ${j.why.join("; ")}`);
   }
-  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events: [ev(1, "grok-4.7"), ev(2, "grok-4.7")] }) }), run: OK_RUN });
+  // A failed attempt (no response, no served model) is not a served response.
+  const j = await judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: ROW, outDir: await sdkRun({ binding: JB, edit: t => ({ ...t, events: [{ type: "provider_call", n: 1, turn: 1, http_status: 429 }, ev(2, "grok-4.7"), ev(3, "grok-4.7")] }) }), run: OK_RUN });
   assert.equal(j.status, "complete", JSON.stringify(j.why));
 });

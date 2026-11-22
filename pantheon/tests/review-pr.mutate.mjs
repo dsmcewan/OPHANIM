@@ -184,7 +184,9 @@ export const MUTATIONS = [
   {id: 'X34', what: 'a continuation replays a response served by another model (or none)', tests: [s('^XAI SDK R4: a run stopped on a response from')],
     edits: [one(INDEX, '      if (rejected || prior.identity_mismatch) {', '      if (false) {')]},
   {id: 'X35', what: 'the judge trusts served_models over the recorded responses', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
-    edits: [one(PR, '    if (e?.type !== "provider_call" || !e.response || typeof e.response !== "object") continue;', '    continue;')]},
+    edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    continue;')]},
+  {id: 'X36', what: 'a call naming another served model without its response body is not checked', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
+    edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    if (e?.type !== "provider_call" || !hasResponse) continue;')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
