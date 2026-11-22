@@ -53,13 +53,20 @@ const verifyBytes = (value, sig, publicJwk) => {
 
 /**
  * A closed kind registry. Each kind: { authors(author) -> bool, validate(payload) -> why|null,
- * rederive(entry, view) -> why|null }. `checkpoint` is reserved for the orderer.
+ * rederive(entry, view) -> why|null, admit?(entry, view) -> why|null }. `checkpoint` is reserved for the orderer.
+ *
+ * `admit` (optional, #136) is a PROSPECTIVE rule: it runs only on the locked new-entry path of append(), once,
+ * for the entry being appended, after every standard check (signatures, keyring, domain, authors, validate,
+ * rederive) has accepted it and before anything reaches disk. verify() and replay never run it, so a rule a kind
+ * adds later binds new entries without re-judging the bytes already on the chain. Nothing a caller passes selects
+ * it: no time, flag, sequence or payload claim; only the code path does.
  */
 export function defineKinds(spec) {
   for (const r of RESERVED) if (Object.hasOwn(spec, r)) fail(`kind "${r}" is reserved`);
   for (const [kind, k] of Object.entries(spec)) {
     if (!KIND_NAME.test(kind)) fail(`kind name "${kind}" is not an identifier`);
     for (const fn of ['authors', 'validate', 'rederive']) if (typeof k[fn] !== 'function') fail(`kind "${kind}" lacks ${fn}()`);
+    if (k.admit !== undefined && typeof k.admit !== 'function') fail(`kind "${kind}" has an admit that is not a function`);
   }
   return Object.freeze({...spec});
 }
@@ -196,13 +203,18 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
       // note(why): a part of this entry the kind could not re-derive because its input is not available
       // (a board that is gone, say). The rest was re-derived; verify() reports the note in `partial`.
       const partial = [];
-      const view = {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? getObject(byHash.get(h).payload_ref) : null),
-        entries: () => [...byHash.keys()], note: why => { partial.push(String(why)); }};
+      const view = viewOver(byHash, partial);
       const why = k.rederive({...e, payload}, view);
       if (why) return `entry ${i}: does not re-derive: ${why}`;
       for (const p of partial) notes?.partial.push({seq: e.seq, kind: e.kind, why: p});
     }
     return null;
+  }
+
+  // What a kind sees of the chain before an entry: the same view for rederive and for admit.
+  function viewOver(byHash, partial) {
+    return {entry: h => byHash.get(h) ?? null, payload: h => (byHash.has(h) ? getObject(byHash.get(h).payload_ref) : null),
+      entries: () => [...byHash.keys()], note: why => { partial.push(String(why)); }};
   }
 
   function checkGenesis(e) {
@@ -389,6 +401,12 @@ export function openLedger({dir, kinds, anchor, checkpointEvery = 64, domains = 
       const notes = {foreign: [], partial: []};
       const why = check(e, entries.length, entries.at(-1) ?? null, byHash, authority, {rederive: true, notes});
       if (why) fail(why);
+      // The prospective boundary (#136): only here, only for this new entry, only after check() accepted it.
+      const k = kind !== AUTHORITY ? kinds[kind] : null;
+      if (k?.admit) {
+        const refused = k.admit({...e, payload: getObject(payload_ref)}, viewOver(byHash, []));
+        if (refused) fail(`entry ${entries.length}: not admitted: ${refused}`);
+      }
       const written = [e];
       if ((entries.length + 1) % checkpointEvery === 0) {
         const all = [...h.hashes, hashOf(e)];

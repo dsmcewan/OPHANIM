@@ -12,13 +12,15 @@
 // Every provider is scripted; no network, no keys, no spend.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import fs, { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
 import { compareProfiles, compareArms, comparisonDigest, dispatchRunner, comparisonEvidence, verifyComparison, COMPARE_SCHEMA } from "../src/practice/compare.mjs";
 import { currentPolicy, qualifyComparison, COMPARISON } from "../src/ledger/practice-kinds.mjs";
-import { openPantheonLedger } from "../src/ledger/system.mjs";
+import { openPantheonLedger, pantheonSystemKinds } from "../src/ledger/system.mjs";
+import { defineKinds } from "../../packages/ledger/chain.mjs";
 import { reviewCycle } from "../src/ledger/review-cycle.mjs";
 import { ledgerView } from "../src/ledger/cycle-kinds.mjs";
 import { withDispatch, WORK, USAGE } from "./fixtures/dispatch.mjs";
@@ -388,4 +390,55 @@ test("roster qualification counts from validated rows: malformed attempts, evide
     let q; assert.doesNotThrow(() => { q = qualifyComparison(r); }, label);
     assert.equal(q.ok, false, label); assert.match(q.why, re, label);
   }
+});
+
+// ---------------------------------------------------------------- #138: the roster rule is PROSPECTIVE (the ledger's admit hook)
+// A ledger written before the rule -- a promote resting on a declared live digest, legal then -- re-opens unchanged;
+// the same promote written now is refused on the recorder path AND on a direct ledger.append, leaving the head, the
+// incumbent decision and the retained raw evidence as they were.
+const withoutRule = opts => { const k = pantheonSystemKinds(opts); const { admit: _, ...before } = k["practice.disposition"]; return defineKinds({ ...k, "practice.disposition": before }); };
+const chainBytes = root => {
+  const walk = d => fs.readdirSync(d, { withFileTypes: true }).flatMap(e => (e.isDirectory() ? walk(join(d, e.name)) : e.name === "chain.jsonl" ? [join(d, e.name)] : []));
+  const [f] = walk(root); return { f, sha: createHash("sha256").update(fs.readFileSync(f)).digest("hex") };
+};
+
+test("roster promotion is prospective: a pre-rule ledger re-opens unchanged; a new unqualified promote is refused on the recorder and on a direct append", async () => {
+  const d = fs.mkdtempSync(join((await import("node:os")).tmpdir(), "pantheon-roster-history-"));
+  const root = join(d, "ledger");
+  try {
+    // The earlier code: the same kinds, without the prospective hook.
+    const old = openPantheonLedger({ root, kinds: withoutRule }); const recOld = old.recorder();
+    const first = await cycleOf(recOld);
+    const measure = recOld.recordDisposition({ cycle: first, outcome: "propose_measurement", question: QUESTION, evidence: [SYNTH], provenance: by });
+    const proposal = recOld.recordDisposition({ cycle: first, outcome: "propose_policy", question: QUESTION, evidence: [SYNTH], provenance: by,
+      candidate: FIT, proposer: { vendor: "openai", model: "gpt-6-sol", lab: "openai" } });
+    recOld.closeCycle(first);
+    const second = await cycleOf(recOld, C("d"));
+    const overrun = await armsRecord({ calls: ({ ticket, arm }) => (ticket === "r0" && arm === "baseline" ? 3 : 1), total: 20 });
+    const kept = recOld.recordComparison(overrun);                   // raw evidence, retained whatever it shows
+    const decide = rec => rec.recordDisposition({ cycle: second, stage: "candidate", proposal, outcome: "promote", question: QUESTION, measured: true,
+      conditions: CONDITIONS, by: { vendor: "xai", model: "grok-4.7", lab: "xai" }, provenance: { by: { role: "check@review" }, method: "review" },
+      evidence: [{ kind: "ledger", hash: measure }, SYNTH, LIVE] });
+    const historical = decide(recOld);                              // legal under the earlier rules
+    assert.equal(ledgerView(old.ledger).payload(historical).outcome, "promote");
+    const before = chainBytes(root);
+
+    // The current code, a fresh open: history re-derives untouched.
+    const now = openPantheonLedger({ root }); const rec = now.recorder();
+    assert.equal(now.ledger.verify().ok, true, "the pre-rule ledger re-opens and verifies");
+    assert.equal(chainBytes(root).sha, before.sha, "its bytes are unchanged");
+    const n = ledgerView(now.ledger).entries().length, incumbent = rec.admittedPractice();
+
+    // A new, otherwise equivalent promote: refused on the recorder path ...
+    assert.throws(() => decide(rec), /not admitted: a promote resting on the live comparison .* cites its retained record/);
+    // ... and on a direct append of the same signed shape.
+    const p = ledgerView(now.ledger).payload(historical);
+    assert.throws(() => now.ledger.append({ kind: "practice.disposition", payload: { ...p, at: new Date().toISOString() }, derivedFrom: ledgerView(now.ledger).entry(historical).derived_from,
+      author: { key_id: now.controller.key_id }, signer: now.controller, order: now.controller }), /not admitted/);
+    assert.equal(chainBytes(root).sha, before.sha, "nothing was written");
+    assert.equal(ledgerView(now.ledger).entries().length, n, "the head did not move");
+    assert.deepEqual(rec.admittedPractice(), incumbent, "the incumbent decision is unchanged");
+    assert.equal(ledgerView(now.ledger).entry(kept).kind, COMPARISON, "the rejected raw evidence is still retained");
+    assert.equal(openPantheonLedger({ root }).ledger.verify().ok, true);
+  } finally { fs.rmSync(d, { recursive: true, force: true }); }
 });

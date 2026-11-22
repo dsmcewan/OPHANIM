@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {spawnSync, spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {openLedger, createLedger, defineKinds, generateSigner, CHECKPOINT, AUTHORITY} from '../chain.mjs';
 
 const chainUrl = new URL('../chain.mjs', import.meta.url).href;
@@ -173,3 +174,67 @@ test('SY5: a holder whose lock was broken does not remove the next holder\'s loc
   assert.equal(JSON.parse(fs.readFileSync(lock, 'utf8')).nonce, 'next');
   assert.match(logged[0], /was broken while this writer held it/);
 }));
+
+// ---------------------------------------------------------------- #136: a prospective admission boundary
+// A kind may add `admit`, a rule for NEW entries only: it runs on the locked new-entry path of append(), after
+// every standard check, before anything reaches disk; verify() and replay never run it.
+function require256(b) { return createHash('sha256').update(b).digest('hex'); }
+const chainFile = dir => path.join(dir, fs.readdirSync(dir).find(f => f.endsWith('.jsonl')));
+const claimKinds = admitted => defineKinds({
+  claim: {authors: a => a.key_id !== 'nobody', validate: p => (typeof p?.proof === 'string' ? null : 'proof must be a string'), rederive: () => null,
+    ...(admitted ? {admit: (e, view) => { admitted.calls.push({seq: e.seq, proof: e.payload.proof, before: view.entries().length}); return e.payload.proof === 'retained' ? null : 'a new claim must cite retained proof'; }} : {})},
+  measure: kinds.measure,                         // an existing kind with no hook
+});
+const claim = (L, proof, s = seat) => L.append({kind: 'claim', payload: {proof}, author: {key_id: s.key_id}, signer: s, order: orderer});
+
+test('#136: an entry accepted before a kind gained admit() re-opens and verifies; a new equivalent append is refused, cold and cached, with the bytes and head unchanged', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ophanim-admit-'));
+  try {
+    const anchor = createLedger({dir, authority, operator, order: orderer});
+    // The original registry: no admit. A digest-only claim is legal and is written.
+    const old = openLedger({dir, kinds: claimKinds(null), anchor});
+    const historical = claim(old, 'declared-only');
+    measure(old, 1);
+    const file = chainFile(dir), bytes = fs.readFileSync(file), digest = require256(bytes);
+
+    // The stronger registry, a fresh process-like instance (cold): the history re-opens and verifies, untouched.
+    const seen = {calls: []};
+    const cold = openLedger({dir, kinds: claimKinds(seen), anchor});
+    assert.equal(cold.verify().ok, true, 'the earlier bytes re-derive under the stronger registry');
+    assert.deepEqual(seen.calls, [], 'verify() never runs admit, on the historical entry or any other');
+    assert.throws(() => claim(cold, 'declared-only'), /not admitted: a new claim must cite retained proof/, 'cold append refused');
+    assert.equal(require256(fs.readFileSync(file)), digest, 'nothing was written');
+    assert.deepEqual(seen.calls.map(c => [c.seq, c.proof]), [[historical.seq + 2, 'declared-only']], 'admit ran once, for the new entry only -- not for the frontier');
+
+    // Cached: a warm instance appends a legal claim (admitted), then is refused the equivalent new one.
+    const ok = claim(cold, 'retained');
+    assert.equal(ok.seq, historical.seq + 2, 'a normal positive append');
+    const afterOk = fs.readFileSync(file);
+    const n = seen.calls.length;
+    assert.throws(() => claim(cold, 'declared-only'), /not admitted/, 'cached append refused');
+    assert.equal(require256(fs.readFileSync(file)), require256(afterOk), 'the chain bytes are unchanged');
+    // The complete hook-call sequence so far: the cold refusal, the admitted append, the cached refusal -- one call
+    // per append, each for the new entry's own sequence, none for any entry already on the chain.
+    assert.deepEqual(seen.calls.map(c => [c.seq, c.proof, c.before]),
+      [[ok.seq, 'declared-only', ok.seq - 1], [ok.seq, 'retained', ok.seq - 1], [ok.seq + 1, 'declared-only', ok.seq]],
+      'once per append, for the new entry; the cached frontier was not re-admitted');
+    assert.equal(seen.calls.length, n + 1);
+    assert.equal(claim(cold, 'retained').seq, ok.seq + 1, 'the head did not move: the next append takes the refused sequence');
+
+    // An existing kind without a hook appends as before.
+    assert.equal(measure(cold, 7).seq, ok.seq + 2);
+    // admit never observes an entry before the standard checks accept it.
+    const m = seen.calls.length;
+    assert.throws(() => cold.append({kind: 'claim', payload: {proof: 3}, ...by(seat)}), /proof must be a string/);
+    assert.throws(() => claim(cold, 'retained', {...seat, key_id: 'nobody'}), /signed by its own author|may not author|keyring/);
+    assert.equal(seen.calls.length, m, 'a payload or author the standard checks refuse never reaches admit');
+
+    // And a third, cold instance still verifies the whole chain, history included.
+    assert.equal(openLedger({dir, kinds: claimKinds({calls: []}), anchor}).verify().ok, true);
+  } finally { fs.rmSync(dir, {recursive: true, force: true}); }
+});
+
+test('#136: defineKinds refuses an admit that is not a function; kinds without one are unchanged', () => {
+  assert.throws(() => defineKinds({x: {authors: () => true, validate: () => null, rederive: () => null, admit: 'yes'}}), /admit that is not a function/);
+  assert.doesNotThrow(() => defineKinds({x: {authors: () => true, validate: () => null, rederive: () => null}}));
+});
