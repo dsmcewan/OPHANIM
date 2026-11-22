@@ -66,6 +66,7 @@ export function routesOf(config) {
 }
 const endpointOf = (config, target) => `repos/${config.repo}/issues/${target.slice(target.indexOf(':') + 1)}/comments`;
 
+const MAX_SENDS = 20, MAX_SCAN = 1000;
 export async function githubTick(store, config, api = githubAPI, cloud = sendCloud) {
   const { allowed, routeOf } = routesOf(config);
   // Each allowlisted target's own timeline, read and imported as that target; nothing else is read. A target whose
@@ -103,7 +104,22 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
     if (found) store.finishDelivery(pending.id, 'delivered', { url: found.html_url, comment_id: found.id, reconciled: true });
   }
   const route = config.outboundTransport ?? 'github';
-  for (const msg of store.outbox(route)) {
+  // BOUNDED, OLDEST-FIRST DISPATCH that looks past messages which must wait (a set-aside target): pages of the queue,
+  // at most MAX_SENDS sends and MAX_SCAN messages looked at per tick.
+  let sends = 0, scanned = 0, after = null;
+  const pending = [];
+  page: while (sends < MAX_SENDS && scanned < MAX_SCAN) {
+    const batch = store.outbox(route, { after, limit: 50 });
+    for (const msg of batch) {
+      after = { created_at: msg.created_at, seq: msg.seq };
+      if (++scanned > MAX_SCAN) break page;
+      pending.push(msg);
+      if (failed.has(routeOf(msg)) || !routeOf(msg) || !allowed.has(routeOf(msg))) continue;
+      if (++sends >= MAX_SENDS) break page;
+    }
+    if (batch.length < 50) break;
+  }
+  for (const msg of pending) {
     const target = routeOf(msg);
     // NO ROUTE: a target the config does not allow (or no target and no legacy PR) is refused, never sent or retried.
     if (!target || !allowed.has(target)) {

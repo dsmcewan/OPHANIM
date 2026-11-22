@@ -181,15 +181,30 @@ export class Store {
       return this.get(id);
     });
   }
-  outbox(route) {
+  recipientOf(route) {
     const to = ['github', 'claude-cloud'].includes(route) ? 'claude' : route === 'desktop' ? 'codex' : null;
     if (!to) throw new Error('Unknown delivery route');
-    return this.db.prepare("SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,id LIMIT 20").all(to).map(r => this.decode(r));
+    return to;
+  }
+  /**
+   * The queued messages a route delivers, oldest first in insertion order (created_at, then rowid: a random id is no
+   * order). Default: the first 20, as every caller has read them. With `after` (the cursor of the last message seen,
+   * {created_at, seq}) the next page, so a caller can look past messages it must leave waiting.
+   */
+  outbox(route, { after = null, limit = 20 } = {}) {
+    const to = this.recipientOf(route);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Outbox page size must be 1..100');
+    const page = after
+      ? this.db.prepare("SELECT rowid AS seq, * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' AND (created_at>? OR (created_at=? AND rowid>?)) ORDER BY created_at,rowid LIMIT ?").all(to, after.created_at, after.created_at, after.seq, limit)
+      : this.db.prepare("SELECT rowid AS seq, * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,rowid LIMIT ?").all(to, limit);
+    return page.map(r => this.decode(r));
   }
   beginDelivery(id, route) {
     return this.transaction(() => {
       const msg = this.get(id);
-      if (!msg || msg.acknowledged_at !== null || msg.delivery_state !== 'queued' || !this.outbox(route).some(m => m.id === id)) throw new Error('Delivery already claimed or unavailable');
+      // Admission by the message's own eligibility (queued, unacknowledged, for this route's recipient), not by its
+      // place in the first outbox page: a message behind 20 others that must wait can still be claimed.
+      if (!msg || msg.acknowledged_at !== null || msg.delivery_state !== 'queued' || msg.to !== this.recipientOf(route)) throw new Error('Delivery already claimed or unavailable');
       this.db.prepare("UPDATE messages SET delivery_state='dispatching',route=? WHERE id=?").run(route, id);
       this.event(id, 'dispatching', route);
       return this.get(id);

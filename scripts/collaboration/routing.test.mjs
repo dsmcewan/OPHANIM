@@ -204,3 +204,42 @@ test('routing: a failure stays with its target -- one unreadable timeline or one
   assert.equal(gh.posts.filter(p => p.n === 104).length, 1);
   assert.equal(store.meta('github-health').ok, true);
 });
+
+test('routing: messages waiting on a failed target never starve another target -- 19, 20 or 21 queued for an unreadable pr:104 still let issue:98 deliver', async t => {
+  for (const blocked of [19, 20, 21]) {
+    const { store } = fixture(t), gh = github();
+    for (let i = 0; i < blocked; i++) store.send({ from: 'codex', to: 'claude', key: `old-${i}`, text: `Older ${i}.`, target: 'pr:104' });
+    const b = store.send({ from: 'codex', to: 'claude', key: 'b', text: 'For issue 98.', target: 'issue:98' });
+    gh.down.read.add(104);
+    for (let tick = 0; tick < 3; tick++) await assert.rejects(bridge.githubTick(store, route, gh.api), /pr:104/);
+    assert.equal(store.get(b.id).delivery_state, 'delivered', `${blocked} blocked: the issue:98 message is delivered`);
+    assert.deepEqual(gh.posts.map(p => p.n), [98], `${blocked} blocked: once, and nothing is written to the unreadable target`);
+  }
+});
+
+test('routing: dispatch is bounded per tick and oldest-first per route; unconfigured routes are refused terminally; the desktop worker\'s outbox is unchanged', async t => {
+  const { store } = fixture(t), gh = github();
+  const ids = [];
+  for (let i = 0; i < 25; i++) ids.push(store.send({ from: 'codex', to: 'claude', key: `m-${i}`, text: `Message ${i}.`, target: i % 2 ? 'issue:98' : 'pr:104' }).id);
+  const stray = store.send({ from: 'codex', to: 'claude', key: 'stray', text: 'Unconfigured.', target: 'pr:555' });
+  assert.equal(store.outbox('github').length, 20, 'the default outbox is still the 20 oldest');
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(gh.posts.length, 20, 'at most 20 sends in one tick');
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(gh.posts.length, 25);
+  const posted = gh.posts.map(p => ids.findIndex(id => p.body.includes(bridge.marker(id))));
+  for (const n of [98, 104]) {
+    const order = gh.posts.filter(p => p.n === n).map(p => ids.findIndex(id => p.body.includes(bridge.marker(id))));
+    assert.deepEqual(order, [...order].sort((x, y) => x - y), `oldest first on ${n}`);
+  }
+  assert.deepEqual(posted, [...Array(25).keys()], 'and oldest first overall');
+  assert.equal(store.get(stray.id).delivery_state, 'refused');
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(gh.posts.length, 25, 'nothing is sent again');
+  const codexBound = [];
+  for (let i = 0; i < 22; i++) codexBound.push(store.send({ from: 'claude', to: 'codex', key: `d-${i}`, text: `To Codex ${i}.` }).id);
+  assert.deepEqual(store.outbox('desktop').map(m => m.id), codexBound.slice(0, 20), 'the desktop worker still reads its 20 oldest');
+  assert.equal(store.beginDelivery(codexBound[21], 'desktop').delivery_state, 'dispatching', 'a queued message outside the first 20 can be claimed');
+  assert.throws(() => store.beginDelivery(codexBound[21], 'desktop'), /already claimed/);
+  assert.throws(() => store.beginDelivery(codexBound[0], 'github'), /already claimed or unavailable/, 'a route never claims another recipient\'s message');
+});
