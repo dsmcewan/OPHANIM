@@ -218,6 +218,18 @@ export function toolDecisionSummary(tool_log = [], dropped = 0) {
   return { total: rows.length, allowed: rows.filter(r => r.allow === true).length, denied: rows.filter(r => r.allow !== true).length, dropped: Number.isInteger(dropped) ? dropped : 0, by_code: sort(by_code), by_who: sort(by_who) };
 }
 
+const EVIDENCE_PHASES = ["none", "prepared", "spawn_attempted", "runtime_observed"];
+/**
+ * The launch receipt a record may keep (#114): ONLY argv (as the transport recorded it, gateway token already
+ * redacted), environment variable NAMES, cwd, gateway url and time. Anything else on the launch object (an environment
+ * value, a prompt) is dropped; no launch is null, never an invented one.
+ */
+export function launchReceipt(launch) {
+  if (!launch || typeof launch !== "object" || Array.isArray(launch)) return null;
+  const strs = v => (Array.isArray(v) ? v.filter(x => typeof x === "string").map(x => x.slice(0, 4096)).slice(0, 256) : []);
+  const one = v => (typeof v === "string" ? v.slice(0, 4096) : null);
+  return { argv: strs(launch.argv), env_names: strs(launch.env_names), cwd: one(launch.cwd), gateway: one(launch.gateway), at: one(launch.at) };
+}
 /**
  * The evidence of one SDK session for the pipeline's record, from what runAntigravitySdkTurn returned or threw (`x`).
  * The tool log is written to <control_dir>/sessions/<n>.tools.json; a write that fails is recorded (log_error), and
@@ -240,6 +252,7 @@ async function sessionEvidence(x, { control_dir, seat, unit_id, attempt, timeout
   const jail = x?.sandbox ? { enabled: x.sandbox.enabled === true, ...(x.sandbox.why ? { why: x.sandbox.why } : {}), ...(x.sandbox.home_dirs_hidden ? { home_dirs_hidden: x.sandbox.home_dirs_hidden.length } : {}) } : null;
   return { stop_reason: x?.stop_reason ?? null, conversation_id: x?.conversation_id ?? null, duration_s: x?.duration_s ?? null, timeout_s, usage: x?.usage ?? null, subagents: x?.subagents ?? null,
     gateway: x?.gateway ?? null, availability: x?.availability ?? [], runtime: x?.runtime ?? null, jail, tool_decisions,
+    launch: launchReceipt(x?.launch), evidence_phase: EVIDENCE_PHASES.includes(x?.evidence_phase) ? x.evidence_phase : null,
   };
 }
 

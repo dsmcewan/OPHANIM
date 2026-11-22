@@ -759,3 +759,22 @@ test("REAL JAIL, A RESEARCH SESSION: what the controller hides is not there insi
   assert.deepEqual(r.sandbox.research_hidden, [join(env.repo, "status/work"), envFile], "and the session's record says what was hidden");
   assert.equal(JSON.parse(readFileSync(key, "utf8")).key_id, "controller", "the file itself is untouched");
 });
+
+// ---- #114: A FAILED SESSION KEEPS ITS SAFE LAUNCH AND SANDBOX RECEIPTS, AND SAYS HOW FAR IT GOT ------------------------
+test("a session refused mid-run (PROVIDER_LIMIT) keeps the launch intent, the explicit sandbox status and how far it got; a refusal before the launch carries no launch and no sandbox", async t => {
+  const { run } = await setup(t);
+  const ok = await run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }]);
+  assert.ok(ok.launch && Array.isArray(ok.launch.env_names), "the success control carries the launch intent");
+  let e = null;
+  try { await run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }, { request: { model: "gemini-4-carbon", as: "root" } }], { admit: (() => { let n = 0; return () => { if (++n > 1) throw Object.assign(new Error("the run's provider-call bound refused the second request"), { code: "PROVIDER_LIMIT" }); }; })() }); } catch (x) { e = x; }
+  assert.equal(e?.code, "PROVIDER_LIMIT", String(e?.message));
+  assert.deepEqual(e.sandbox, ok.sandbox, "the explicit sandbox status is on the failure as on the success");
+  assert.deepEqual(Object.keys(e.launch ?? {}).sort(), ["argv", "at", "cwd", "env_names", "gateway"]);
+  assert.equal(e.evidence_phase, e.runtime ? "runtime_observed" : "spawn_attempted");
+  const published = JSON.stringify({ launch: e.launch, sandbox: e.sandbox });
+  assert.ok(!published.includes(KEY), "no credential in the receipts");
+  let pre = null;
+  try { await run(CARBON, [{ request: { model: "gemini-4-carbon", as: "root" } }], { sandbox: { enabled: false } }); } catch (x) { pre = x; }
+  assert.equal(pre?.code, "SANDBOX_UNAVAILABLE");
+  assert.deepEqual([pre.launch ?? null, pre.sandbox ?? null, pre.evidence_phase], [null, null, "none"], "nothing was launched or prepared: no receipt is invented");
+});

@@ -651,3 +651,25 @@ test("A PARTIAL CHECKPOINT THE RUN CANNOT USE IS SAID SO, NOT PASSED OVER: after
   assert.deepEqual([second.u.partial_rejected.unit_key, second.out.checkpoints.partial_rejected], [first.u.unit_key, ["a"]]);
   assert.equal(existsSync(old), false, "the unit is approved: its earlier partial checkpoint is removed with it");
 });
+
+// ---- #114: THE DURABLE FAILED ATTEMPT KEEPS THE ALLOWLISTED LAUNCH RECEIPT --------------------------------------------
+test("a failed SDK attempt keeps the allowlisted launch receipt and the stage it reached, through the billing refusal's remap, on the attempt and in pipeline.json; nothing else of the launch is kept, and a prelaunch failure invents none", async t => {
+  const LAUNCH = { argv: ["bwrap", "--ro-bind", "/", "/", "python3", "bridge.py"], env_names: ["HOME", "PATH"], cwd: "/control/u1", gateway: "http://127.0.0.1:4321", at: "t" };
+  const one = optIn({ primary: 1 });
+  const r = await pipeline(t, args => {
+    args.admit({ class: "root", type: null, model: args.seat.model });
+    try { args.admit({ class: "root", type: null, model: args.seat.model }); }
+    catch (e) { throw Object.assign(e, { transport: "antigravity-sdk", subagents: governed(args), gateway: gatewayOf(args), tool_log: [], usage: null, runtime: null, availability: [],
+      sandbox: { enabled: true, binds: [] }, launch: { ...LAUNCH, env: { GEMINI_API_KEY: "secret-value" }, prompt: "the unit's prompt text" }, evidence_phase: "spawn_attempted" }); }
+    throw new Error("the second request was admitted");
+  }, { agy: { billing: one } });
+  assert.deepEqual([r.u.status, r.u.code], ["blocked", "METERED_GEMINI_BUDGET_EXHAUSTED"], r.u.reason);
+  const session = r.u.attempts[0].session;
+  assert.deepEqual([session.launch, session.evidence_phase, session.jail?.enabled], [LAUNCH, "spawn_attempted", true]);
+  const disk = JSON.stringify(r.disk());
+  assert.ok(disk.includes('"gateway":"http://127.0.0.1:4321"'), "the receipt is in pipeline.json");
+  assert.ok(!disk.includes("secret-value") && !disk.includes("the unit's prompt text"), "no environment value and no prompt from the launch reaches the record");
+  const pre = await pipeline(t, () => { throw sdkError("SANDBOX_UNAVAILABLE", "the implementer session is not started unjailed", { tool_log: [], sandbox: null, launch: null, evidence_phase: "none" }); });
+  const ps = pre.u.attempts[0].session;
+  assert.deepEqual([ps?.launch ?? null, ps?.evidence_phase ?? null], [null, "none"], "a prelaunch failure carries no launch receipt");
+});
