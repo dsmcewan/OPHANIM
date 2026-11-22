@@ -34,6 +34,19 @@
 //      its status and reasons, the runner's own record of what ran (coverage, review_tests), the files and their
 //      sha256, and the reviewer's own "Tests run", "Unresolved questions" and "Blockers for merging" sections. The
 //      findings-* path is withheld from every later review copy (index.mjs WITHHELD).
+// THE xAI SDK ROUTE (owner assignment 2026-11-22): a panel entry may carry `route: "xai-sdk"` (the xAI lab only) with its
+// declared `limits` ({max_turns, max_tool_calls, max_output_tokens, timeout_s}). That reviewer runs through the API runner
+// over the official SDK (run-review.mjs --via api --xai-transport sdk, with those limits and --max-wall-s), and is judged
+// on the API transcript: via api, transport xai-sdk, every served model the bound one, the bound README, assignment and
+// HARNESS.md, the coverage gate, no change to the review copy outside .review-tests/, and its calls within the bound
+// limits. The judge FAILS CLOSED: a counter, a check or a coverage fact that is missing or malformed is a reason, never a
+// pass; the gate's verdict is re-derived from its own coverage facts, and those facts are checked against the
+// assignment's testing limit (the README row). The COUNTS AND COVERAGE ARE DERIVED FROM THE RECORDED EVENTS (the
+// producer's own rules, coverage.mjs coverageOfApi): a fresh run's counters equal its events; a continuation keeps the
+// earlier runs' events, so ITS counters equal the events after its last continuation event, and its cumulative
+// counters equal all of them; the bound limits apply per invocation, to this run's events. A CLI transcript never satisfies a routed reviewer, nor an SDK transcript a subscription one. Entries without a
+// route dispatch and are judged exactly as before; the panel's independence rules are unchanged. A record may sit beside
+// its brief as binding.json or binding-<name>.json (a fresh leg keeps the earlier record intact).
 // The merge decision is never taken here: the result says so. Exit codes: 0 every reviewer complete (or a dry run whose
 // plans all passed), 1 refused (a binding failed), 2 usage, 3 at least one review incomplete.
 import { spawn } from "node:child_process";
@@ -42,6 +55,9 @@ import { chmod, cp, mkdir, mkdtemp, readFile, readdir, realpath, stat, writeFile
 import { join, resolve, dirname, relative, isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
 import { REVIEW_DIR_RE, assignmentRow, BriefError } from "./brief.mjs";
+import { coverageGate, coverageOfApi, testsAllowedBy } from "./coverage.mjs";
+import { permissionsFor } from "./tools.mjs";
+import { worktreeViolations } from "./cli-common.mjs";
 
 export const BINDING_SCHEMA = "ophanim.pr-review/v1";
 export const RESULT_SCHEMA = "ophanim.pr-review-result/v1";
@@ -58,6 +74,11 @@ export const REQUIRED_SECTIONS = Object.freeze(["tests_run", "unresolved_questio
 export const HOST_FLAGS = Object.freeze(["grok-state-dir", "agy-cli", "grok-cli", "codex-cli", "codex-outer-runtime"]);
 /** Beyond --max-wall-s, how long a runner may take (preflights, the review copy, its own teardown) before it is killed. */
 export const DEFAULT_GRACE_MS = 15 * 60 * 1000;
+/** The routes a panel entry may name, the lab each is for, and the limits it must declare (each a whole number up to its cap). */
+export const ROUTES = Object.freeze({ "xai-sdk": { lab: "xai", transport: "xai-sdk" } });
+export const ROUTE_LIMITS = Object.freeze({ max_turns: 200, max_tool_calls: 400, max_output_tokens: 128000, timeout_s: 3600 });
+/** The record's file name beside its brief. */
+export const BINDING_NAME_RE = /^binding(-[a-z0-9][a-z0-9-]{0,62})?\.json$/;
 const STAGE_ROOT = "/tmp";
 
 const HEX40 = /^[0-9a-f]{40}$/, HEX64 = /^[0-9a-f]{64}$/;
@@ -107,6 +128,13 @@ export function shapeProblems(b) {
   for (const r of b.panel ?? []) {
     if (!LABS[r?.lab]) p.push(`panel: lab ${JSON.stringify(r?.lab)} is not one of ${Object.keys(LABS).join(", ")}`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(r?.model ?? "")) p.push(`panel: model ${JSON.stringify(r?.model)} is not a model id`);
+    if (r?.route === undefined) { if (r?.limits !== undefined) p.push("panel: limits apply to a routed reviewer only"); continue; }
+    const route = ROUTES[r.route];
+    if (!route) { p.push(`panel: route ${JSON.stringify(r.route)} is not a route (${Object.keys(ROUTES).join(", ")})`); continue; }
+    if (r.lab !== route.lab) p.push(`panel: route ${r.route} is for the ${route.lab} lab only`);
+    if (!r.limits || typeof r.limits !== "object" || Array.isArray(r.limits)) { p.push(`panel: route ${r.route} must declare limits (${Object.keys(ROUTE_LIMITS).join(", ")})`); continue; }
+    for (const k of Object.keys(r.limits)) if (!Object.hasOwn(ROUTE_LIMITS, k)) p.push(`panel: limits has an unknown key ${JSON.stringify(k)}`);
+    for (const [k, cap] of Object.entries(ROUTE_LIMITS)) if (!Number.isSafeInteger(r.limits[k]) || r.limits[k] < 1 || r.limits[k] > cap) p.push(`panel: limits.${k} must be a whole number from 1 to ${cap}`);
   }
   return p;
 }
@@ -140,7 +168,8 @@ export async function verifyBinding({ binding: b, bindingRel, repoRoot, gitFn = 
   const g = (...a) => gitFn(repoRoot, a);
   const dir = b.brief.dir, files = briefNames(b).map(f => `${dir}/${f}`);
 
-  add("record beside its brief", bindingRel === `${dir}/binding.json`, bindingRel === `${dir}/binding.json` ? `${bindingRel}` : `the record is ${bindingRel}; it must be ${dir}/binding.json, in the brief's own directory`);
+  const beside = bindingRel.startsWith(`${dir}/`) && BINDING_NAME_RE.test(bindingRel.slice(dir.length + 1));
+  add("record beside its brief", beside, beside ? `${bindingRel}` : `the record is ${bindingRel}; it must be ${dir}/binding.json or binding-<name>.json, in the brief's own directory`);
 
   const tracked = await g("ls-files", "--error-unmatch", "--", bindingRel, ...files);
   const clean = await g("diff", "--quiet", "HEAD", "--", bindingRel, ...files);
@@ -208,11 +237,15 @@ export async function verifyBinding({ binding: b, bindingRel, repoRoot, gitFn = 
 
 /** The run-review argv for one reviewer (after the script path). */
 export function runnerArgs({ binding: b, reviewer, readmeRow, telosRoot, maxWallS, out, dryRun, hostFlags = {} }) {
-  const a = ["--via", "subscription", "--review-dir", b.brief.dir, "--assignment", String(b.brief.assignment), "--commit", b.head.sha,
+  // A routed reviewer (xai-sdk) runs the API runner over the SDK with its bound limits; every other one, its subscription.
+  const routed = reviewer.route === "xai-sdk", L = reviewer.limits ?? {};
+  const a = ["--via", routed ? "api" : "subscription", ...(routed ? ["--xai-transport", "sdk"] : []), "--review-dir", b.brief.dir, "--assignment", String(b.brief.assignment), "--commit", b.head.sha,
+    ...(routed ? ["--max-turns", String(L.max_turns), "--max-tool-calls", String(L.max_tool_calls), "--max-output-tokens", String(L.max_output_tokens), "--timeout-s", String(L.timeout_s)] : []),
     "--max-wall-s", String(maxWallS), "--telos-root", telosRoot, "--out", out];
   const isDefault = readmeRow && readmeRow.lab.toLowerCase() === LABS[reviewer.lab].toLowerCase() && readmeRow.model === reviewer.model;
   if (!isDefault) a.push("--reviewer", `${reviewer.lab}:${reviewer.model}`);
-  for (const k of HOST_FLAGS) if (hostFlags[k] !== undefined) a.push(`--${k}`, hostFlags[k]);
+  // The subscription host flags configure the CLIs; a routed reviewer runs none.
+  if (!routed) for (const k of HOST_FLAGS) if (hostFlags[k] !== undefined) a.push(`--${k}`, hostFlags[k]);
   if (dryRun) a.push("--dry-run");
   return a;
 }
@@ -273,7 +306,7 @@ const listFiles = async dir => {
 };
 
 /** One lab's verdict from what its run left in `outDir` (see the header, step 4). */
-export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
+export async function judgeReviewer({ binding: b, reviewer, outDir, run, readmeRow = null }) {
   const lab = LABS[reviewer.lab], n = b.brief.assignment, key = lab.toLowerCase();
   const findingsPath = join(outDir, `findings-${n}-${key}.md`), transcriptPath = join(outDir, `findings-${n}-${key}.transcript.json`);
   const findings = await readFile(findingsPath, "utf8").catch(() => null);
@@ -293,13 +326,15 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     if (t.commit !== b.head.sha) why.push(`the transcript reviewed ${t.commit ?? "no commit"}, not the bound head ${b.head.sha}`);
     if (t.requested_model !== reviewer.model) why.push(`the transcript's model is ${t.requested_model ?? "none"}, not the bound ${reviewer.model}`);
     if (t.lab !== lab) why.push(`the transcript's lab is ${t.lab ?? "none"}, not ${lab}`);
-    if (t.via !== "subscription") why.push(`the transcript's via is ${t.via ?? "none"}, not subscription`);
-    if (t.identity_mismatch) why.push("the CLI reported another model than the one asked for (identity_mismatch)");
+    // Entries without a route: exactly the checks, in the order, they had before the route existed.
+    if (!reviewer.route && t.via !== "subscription") why.push(`the transcript's via is ${t.via ?? "none"}, not subscription`);
+    if (!reviewer.route && t.identity_mismatch) why.push("the CLI reported another model than the one asked for (identity_mismatch)");
     const pr = t.prompt ?? {};
     const assignmentFile = briefNames(b).find(f => /^\d-/.test(f));
     if (pr.readme_sha256 !== b.brief.files["README.md"]) why.push("the prompt's README is not the bound README");
     if (pr.assignment_sha256 !== b.brief.files[assignmentFile]) why.push("the prompt's assignment is not the bound assignment file");
-    if (pr.harness_cli_template?.sha256 !== b.brief.files["HARNESS-cli.md"]) why.push("the prompt's harness is not the bound HARNESS-cli.md");
+    if (!reviewer.route && pr.harness_cli_template?.sha256 !== b.brief.files["HARNESS-cli.md"]) why.push("the prompt's harness is not the bound HARNESS-cli.md");
+    if (reviewer.route) why.push(...routedProblems(t, reviewer, b, readmeRow));
   }
   const sections = findings === null ? { found_marker: false, tests_run: null, unresolved_questions: null, blockers_for_merging: null } : reviewerSections(findings);
   if (findings !== null && !sections.found_marker) why.push("missing evidence: the findings file has no reviewer message (no marker line)");
@@ -308,7 +343,8 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
   for (const p of await listFiles(outDir)) files.push({ path: relative(outDir, p), sha256: sha256(await readFile(p)), bytes: (await stat(p)).size });
   const cov = t?.coverage ?? null;
   return {
-    lab, lab_key: reviewer.lab, model: reviewer.model, status: why.length ? "incomplete" : "complete", why,
+    lab, lab_key: reviewer.lab, model: reviewer.model, ...(reviewer.route ? { route: reviewer.route, served_models: t?.served_models ?? null, cost_totals: t?.cost_totals ?? null, limits: reviewer.limits } : {}),
+    status: why.length ? "incomplete" : "complete", why,
     run: { exit_code: run.exit_code, signal: run.signal, killed_for: run.killed_for, spawn_error: run.spawn_error, started_at: run.started_at, ended_at: run.ended_at },
     runner: t ? { status: t.status ?? null, stop_reason: t.stop_reason ?? null, transport: t.transport ?? null, commit: t.commit ?? null, requested_model: t.requested_model ?? null } : null,
     tests: cov ? { tests_run: cov.tests_run ?? 0, tests_allowed: cov.tests_allowed ?? null, tests_refused: cov.tests_refused ?? null, source_reads: cov.source_reads ?? 0, denied_reads: cov.denied_reads ?? 0, method: cov.method ?? null } : null,
@@ -320,6 +356,99 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run }) {
     reviewer_sections: { tests_run: sections.tests_run, unresolved_questions: sections.unresolved_questions, blockers_for_merging: sections.blockers_for_merging },
     files,
   };
+}
+
+/** What a routed reviewer's transcript must show beyond the common checks (see the header). Fails closed. */
+const wholeCount = v => Number.isSafeInteger(v) && v >= 0;
+function routedProblems(t, reviewer, b, readmeRow) {
+  const why = [], route = ROUTES[reviewer.route], L = reviewer.limits ?? {};
+  if (t.via !== "api") why.push(`the transcript's via is ${t.via ?? "none"}, not api (route ${reviewer.route})`);
+  if (t.transport !== route.transport) why.push(`the transcript's transport is ${t.transport ?? "none"}, not ${route.transport}`);
+  if (t.prompt?.harness_template?.sha256 !== b.brief.files["HARNESS.md"]) why.push("the prompt's harness is not the bound HARNESS.md");
+  // Provenance: every response named the bound model (the runner stops at the first that did not).
+  const served = Array.isArray(t.served_models) ? t.served_models : [];
+  if (!served.length) why.push("missing provenance: no response named a served model");
+  else if (served.includes(null)) why.push("missing provenance: a response named no served model");
+  for (const s of served) if (s !== null && s !== reviewer.model) why.push(`a response was served by ${s}, not the bound ${reviewer.model}`);
+  if (t.identity_mismatch) why.push("the runner refused a response served by another model (identity_mismatch)");
+  // The facts behind the summary: every recorded response, an earlier run's included (a continuation carries them).
+  for (const e of Array.isArray(t.events) ? t.events : []) {
+    // A call that recorded a response, or names a served model, is a served response; a failed attempt names neither.
+    const hasResponse = e?.response && typeof e.response === "object";
+    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;
+    const s = e.served_model ?? (hasResponse ? e.response.model : null) ?? null;
+    if (s === null) why.push(`missing provenance: the recorded response at turn ${e.turn ?? "?"} named no served model`);
+    else if (s !== reviewer.model) why.push(`the recorded response at turn ${e.turn ?? "?"} was served by ${s}, not the bound ${reviewer.model}`);
+  }
+  // The review copy: the check ran, and is well formed, and found nothing outside .review-tests/.
+  const w = t.worktree_check;
+  if (w === undefined || w === null) why.push("missing evidence: the transcript records no check of the review copy");
+  else if (typeof w !== "object" || !Array.isArray(w.changed) || !Array.isArray(w.violations)) why.push("missing evidence: the check of the review copy is malformed (it needs its changed and violations lists)");
+  else if (w.violations.length) why.push(`the review copy changed outside .review-tests/: ${w.violations.join(", ")}`);
+  else {
+    // The violations list is the runner's summary; the changed paths are the facts. They are re-checked here with the
+    // bound assignment's write permission and the runner's own path policy, so an empty summary is never taken alone.
+    const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
+    if (perms) {
+      const writable = perms.tools.includes("write_test");
+      for (const p of worktreeViolations(w.changed, { write_allowed: writable }))
+        why.push(`the review copy's changed paths contradict its violations list: ${p} is not allowed by the bound write policy${writable ? "" : " (this assignment allows no write)"}`);
+    }
+  }
+  // The bounds and counts, from the recorded events (see the header).
+  const diff = Object.keys(ROUTE_LIMITS).filter(k => t.limits?.[k] !== L[k]);
+  if (diff.length) why.push(`the run's limits are not the bound limits (${diff.map(k => `${k} ${t.limits?.[k] ?? "none"} vs ${L[k]}`).join(", ")})`);
+  for (const k of ["provider_calls", "tool_calls"]) if (!wholeCount(t[k])) why.push(`missing evidence: ${k} is not a whole number`);
+  const events = Array.isArray(t.events) ? t.events : null;
+  if (!events) { why.push("missing evidence: the transcript records no events"); return why; }
+  const count = (list, type) => list.filter(e => e?.type === type).length;
+  const lastCont = events.reduce((at, e, i) => (e?.type === "continuation" ? i : at), -1);
+  const continued = t.continued_from !== undefined && t.continued_from !== null;
+  if (continued && lastCont < 0) why.push("a transcript continued from another records no continuation event");
+  if (!continued && lastCont >= 0) why.push("a continuation event is recorded, but the transcript names no run it continued from");
+  const thisRun = lastCont >= 0 ? events.slice(lastCont + 1) : events;
+  const pc = count(thisRun, "provider_call"), tc = count(thisRun, "tool_call"), pcAll = count(events, "provider_call"), tcAll = count(events, "tool_call");
+  const scope = lastCont >= 0 ? "this run's events (after its continuation)" : "the recorded events";
+  if (wholeCount(t.provider_calls) && t.provider_calls !== pc) why.push(`${scope} hold ${pc} provider call(s); the transcript's provider_calls says ${t.provider_calls}`);
+  if (wholeCount(t.tool_calls) && t.tool_calls !== tc) why.push(`${scope} hold ${tc} tool call(s); the transcript's tool_calls says ${t.tool_calls}`);
+  if (lastCont >= 0) {
+    const cu = t.cumulative;
+    if (!cu || typeof cu !== "object") why.push("missing evidence: a continuation records no cumulative counts");
+    else {
+      if (cu.provider_calls !== pcAll) why.push(`the recorded events hold ${pcAll} provider call(s) across the runs; cumulative.provider_calls says ${cu.provider_calls ?? "none"}`);
+      if (cu.tool_calls !== tcAll) why.push(`the recorded events hold ${tcAll} tool call(s) across the runs; cumulative.tool_calls says ${cu.tool_calls ?? "none"}`);
+    }
+  }
+  if (pc === 0) why.push("no provider call is recorded");
+  if (pc > L.max_turns) why.push(`${pc} recorded provider calls exceed the bound max_turns ${L.max_turns}`);
+  if (tc > L.max_tool_calls) why.push(`${tc} recorded tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
+  // Real model evidence: at least one recorded, successful response served by the bound model.
+  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model) === reviewer.model))
+    why.push(`missing evidence: no recorded response was served by the bound ${reviewer.model}`);
+  // Coverage: the summary is present and well formed; the facts, re-derived from the events by the producer's own rules
+  // against the bound assignment, pass the gate and agree with the summary.
+  const c = t.coverage;
+  if (!c || typeof c !== "object") why.push("missing evidence: no coverage record");
+  else {
+    const bad = ["source_reads", "denied_reads", "tests_run"].filter(k => !wholeCount(c[k]));
+    if (bad.length) why.push(`missing evidence: the coverage record's ${bad.join(", ")} ${bad.length > 1 ? "are" : "is"} not a whole number`);
+    if (typeof c.tests_allowed !== "boolean") why.push("missing evidence: the coverage record does not say whether tests are allowed");
+    const g = coverageGate(c);
+    if (t.coverage_gate?.ok && !g.ok) why.push(`the coverage facts contradict the gate: ${g.reasons.join("; ")}`);
+  }
+  const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
+  if (!perms) why.push(`the assignment's testing limit is not known here${readmeRow?.testing ? ` (${readmeRow.testing})` : ""}: the coverage cannot be checked against it`);
+  else {
+    const allowed = testsAllowedBy(perms), facts = coverageOfApi(events, { tests_allowed: allowed });
+    if (c && typeof c === "object" && typeof c.tests_allowed === "boolean" && c.tests_allowed !== allowed) why.push(`the coverage record says tests are ${c.tests_allowed ? "" : "not "}allowed; the assignment's testing limit (${readmeRow.testing}) ${allowed ? "allows them" : "does not"}`);
+    if (c && typeof c === "object") {
+      const off = ["source_reads", "denied_reads", "tests_run"].filter(k => c[k] !== facts[k]);
+      if (off.length) why.push(`the coverage summary contradicts the recorded events (${off.map(k => `${k} ${c[k]} vs ${facts[k]}`).join(", ")})`);
+    }
+    const fg = coverageGate(facts);
+    if (!fg.ok) why.push(`the recorded events do not pass the coverage gate: ${fg.reasons.join("; ")}`);
+  }
+  return why;
 }
 
 async function underTmp(p) {
@@ -413,7 +542,7 @@ export async function main(argv, deps = {}) {
     if (opts.dryRun) {
       const ok = run.exit_code === EXIT.complete;
       results.push({ lab: LABS[reviewer.lab], lab_key: reviewer.lab, model: reviewer.model, status: ok ? "dry-run" : "incomplete", why: ok ? [] : [`the dry run exited ${run.exit_code ?? run.killed_for ?? run.signal}${run.stderr_tail.length ? `: ${run.stderr_tail.join(" | ")}` : ""}`], run, plan: `${outDir}/run-review.stdout` });
-    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));
+    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));
     const r = results.at(-1);
     err(`review-pr: ${r.lab}: ${r.status}${r.why.length ? ` (${r.why.join("; ")})` : ""}\n`);
   }

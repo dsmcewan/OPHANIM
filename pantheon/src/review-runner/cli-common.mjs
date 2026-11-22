@@ -201,12 +201,16 @@ export async function worktreeState(git) {
  * changed. Allowed: paths under .review-tests/ when `write_allowed`, nothing otherwise. A moved HEAD is a violation.
  * Returns {changed: [paths], violations: [paths | "HEAD moved ..."], limits: [...]}.
  */
+/** The changed paths the write policy does not allow: everything, unless writes are allowed and it is under .review-tests/. */
+export const worktreeViolations = (changed, { write_allowed }) =>
+  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));
+
 export function compareWorktree(before, after, { write_allowed }) {
   const changed = [];
   for (const [p, code] of after.entries) if (before.entries.get(p) !== code) changed.push(p);
   for (const p of before.entries.keys()) if (!after.entries.has(p)) changed.push(p);
   changed.sort();
-  const violations = changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));
+  const violations = worktreeViolations(changed, { write_allowed });
   if (before.head !== after.head) violations.push(`HEAD moved from ${before.head} to ${after.head}`);
   if (!before.ok || !after.ok) violations.push("git status could not be read before and after the run: the check is incomplete");
   return { changed, violations,

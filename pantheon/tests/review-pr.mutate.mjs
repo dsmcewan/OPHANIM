@@ -25,10 +25,12 @@ import {fileURLToPath} from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const TEST = 'pantheon/tests/review-pr.test.mjs';
-const SUITES = [TEST];
+const SDK = 'pantheon/tests/review-runner-xai-sdk.test.mjs';
+const SUITES = [TEST, SDK];
 const R = 'pantheon/src/review-runner/', PR = `${R}pr-review.mjs`, BRIEF = `${R}brief.mjs`, INDEX = `${R}index.mjs`, SUB = `${R}subscription.mjs`;
 const one = (file, from, to) => ({file, from, to});
 const t = pattern => [TEST, pattern];
+const s = pattern => [SDK, pattern];
 
 export const MUTATIONS = [
   // ---- the bindings, verified before dispatch ----------------------------------------------------------------------
@@ -43,7 +45,7 @@ export const MUTATIONS = [
   {id: 'P5', what: 'an untracked record is accepted', tests: [t('^PR REVIEW BINDING refuses before dispatch: the record is not tracked')],
     edits: [one(PR, '  add("committed", tracked.code === 0 && clean.code === 0,', '  add("committed", clean.code === 0,')]},
   {id: 'P6', what: 'a record outside the brief\'s own directory is accepted', tests: [t('^PR REVIEW BINDING refuses before dispatch: the record is not in the brief\'s directory')],
-    edits: [one(PR, '  add("record beside its brief", bindingRel === `${dir}/binding.json`,', '  add("record beside its brief", true,')]},
+    edits: [one(PR, '  const beside = bindingRel.startsWith(`${dir}/`) && BINDING_NAME_RE.test(bindingRel.slice(dir.length + 1));', '  const beside = true;')]},
   {id: 'P7', what: 'the README row may link another assignment file than the bound one', tests: [t('^PR REVIEW BINDING: the README\'s row')],
     edits: [one(PR, '    rowOk = row.file === assignmentFile;', '    rowOk = true;')]},
   {id: 'P8', what: 'a brief that does not name the bound PR and head is accepted', tests: [t('^PR REVIEW BINDING: the brief must name')],
@@ -106,6 +108,100 @@ export const MUTATIONS = [
     edits: [one(SUB, '  const harnessTemplate = await readFile(join(repoRoot, reviewDir, "HARNESS-cli.md"), "utf8")', '  const harnessTemplate = await readFile(join(repoRoot, REVIEW_DIR, "HARNESS-cli.md"), "utf8")')]},
   {id: 'R4', what: 'the plan names the default round\'s harness', tests: [t('^REVIEW DIR: --review-dir loads')],
     edits: [one(INDEX, '      harness_template: { path: `${reviewDir}/HARNESS.md`', '      harness_template: { path: `${REVIEW_DIR}/HARNESS.md`')]},
+  // ---- the xAI SDK route (owner assignment 2026-11-22): the coordinator's dispatch and judgment, the runner's SDK leg ----
+  {id: 'X1', what: 'a route is accepted on a lab it is not for', tests: [t('^XAI SDK ROUTE: the binding may route')],
+    edits: [one(PR, '    if (r.lab !== route.lab) p.push(', '    if (false) p.push(')]},
+  {id: 'X2', what: 'a routed reviewer needs no declared limits', tests: [t('^XAI SDK ROUTE: the binding may route')],
+    edits: [one(PR, "    if (!r.limits || typeof r.limits !== \"object\" || Array.isArray(r.limits)) { p.push(", "    if (false) { p.push(")]},
+  {id: 'X3', what: 'the routed reviewer is dispatched to its subscription', tests: [t('^XAI SDK ROUTE: runnerArgs dispatch'), t('^XAI SDK ROUTE: the complete coordinator path')],
+    edits: [one(PR, '  const routed = reviewer.route === "xai-sdk", L = reviewer.limits ?? {};', '  const routed = false, L = reviewer.limits ?? {};')]},
+  {id: 'X4', what: 'the routed reviewer is dispatched without its bound limits', tests: [t('^XAI SDK ROUTE: runnerArgs dispatch')],
+    edits: [one(PR, '"--max-turns", String(L.max_turns), ', '"--max-turns", "200", ')]},
+  {id: 'X5', what: 'a CLI transcript satisfies a routed reviewer', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  if (t.via !== "api") why.push(', '  if (false) why.push(')]},
+  {id: 'X6', what: 'another transport satisfies a routed reviewer', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  if (t.transport !== route.transport) why.push(', '  if (false) why.push(')]},
+  {id: 'X7', what: 'a response served by another model is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  for (const s of served) if (s !== null && s !== reviewer.model) why.push(', '  for (const s of served) if (false) why.push(')]},
+  {id: 'X8', what: 'a response naming no served model is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  else if (served.includes(null)) why.push(', '  else if (false) why.push(')]},
+  {id: 'X9', what: 'a change to the review copy is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  else if (w.violations.length) why.push(', '  else if (false) why.push(')]},
+  {id: 'X10', what: 'a run under other limits is accepted', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '  if (diff.length) why.push(`the run\'s limits', '  if (false) why.push(`the run\'s limits')]},
+  {id: 'X11', what: 'an SDK run satisfies a subscription reviewer', tests: [t('^XAI SDK ROUTE: judgeReviewer refuses')],
+    edits: [one(PR, '    if (!reviewer.route && t.via !== "subscription") why.push(', '    if (false) why.push(')]},
+  {id: 'X12', what: 'the SDK client keeps the SDK\'s own retries', tests: [s('^XAI SDK: the SDK client is built for xAI only')],
+    edits: [one(INDEX, '      state.xai = await make({ apiKey: key, baseURL: XAI_SDK.base_url, maxRetries: XAI_SDK.max_retries, timeout: timeoutMs });', '      state.xai = await make({ apiKey: key, baseURL: XAI_SDK.base_url, timeout: timeoutMs });')]},
+  {id: 'X13', what: 'the SDK route is not bounded by its wall clock', tests: [s('^XAI SDK: the whole run is bounded by --max-wall-s')],
+    edits: [one(INDEX, '    if (plan.transport === "xai-sdk" && deadline !== null && now().getTime() >= deadline) return wallStop();', '    if (false) return wallStop();')]},
+  {id: 'X14', what: 'a 429 on the SDK route is retried beyond max_turns', tests: [s('^XAI SDK: the retry never exceeds max_turns')],
+    edits: [one(INDEX, '        if ((status === 429 || status >= 500) && attempt === 1 && state.providerCalls < opts.limits.max_turns) {', '        if ((status === 429 || status >= 500) && attempt === 1) {')]},
+  {id: 'X15', what: 'an unreported cost is recorded as zero', tests: [s('^XAI SDK: the SDK client is built for xAI only'), s('^XAI SDK: a reported cost of zero')],
+    edits: [one(INDEX, '  return { reported: false, value: null, field: null };\n}', '  return { reported: true, value: 0, field: "cost" };\n}')]},
+  {id: 'X16', what: 'a source edit in the review copy leaves the review complete', tests: [s('^XAI SDK: a change to a source file')],
+    edits: [one(INDEX, '  if (state.worktree_check?.violations.length) { status = "incomplete";', '  if (false) { status = "incomplete";')]},
+  {id: 'X17', what: 'a continuation is accepted across transports', tests: [s('^XAI SDK: --continue refuses a transcript of another transport')],
+    edits: [one(INDEX, '    if (prior && (prior.via ?? "api") === "api" && (prior.transport ?? null) !== (plan.transport ?? null)) {', '    if (false) {')]},
+  {id: 'X18', what: 'the SDK error class is lost (every failure recorded as Error)', tests: [s("^XAI SDK: the real SDK's own error classes")],
+    edits: [one(INDEX, '        ev.sdk_error = cls && cls !== "Error" ? cls : (e?.name ?? "Error");', '        ev.sdk_error = e?.name ?? "Error";')]},
+  {id: 'X19', what: 'the SDK route may serve a non-xAI reviewer', tests: [s('^XAI SDK: usage')],
+    edits: [one(INDEX, '  if (opts.xaiTransport && row.vendor !== "xai") throw new UsageError(', '  if (false) throw new UsageError(')]},
+  // ---- round 2 (Codex's independent cases at 42836cc): the inner retry's deadline, provenance before effects, a judge
+  // that fails closed on an incomplete record, the documented cost field ------------------------------------------
+  {id: 'X20', what: 'an attempt (a retry included) is sent past the wall clock', tests: [s('^XAI SDK R2: the wall clock bounds the INNER retry')],
+    edits: [one(INDEX, '    if (plan.transport === "xai-sdk" && deadline !== null && now().getTime() >= deadline) return wallStop();', '    if (false) return wallStop();'),
+            one(INDEX, '          if (deadline !== null && now().getTime() + wait >= deadline) { ev.retry_skipped', '          if (false) { ev.retry_skipped')]},
+  {id: 'X21', what: 'a retry sleeps past the wall clock', tests: [s('^XAI SDK R2: the wall clock bounds the INNER retry')],
+    edits: [one(INDEX, '          if (deadline !== null && now().getTime() + wait >= deadline) { ev.retry_skipped', '          if (false) { ev.retry_skipped')]},
+  {id: 'X22', what: 'an attempt\'s abort deadline ignores the remaining wall clock', tests: [s("^XAI SDK R2: each attempt's abort deadline")],
+    edits: [one(INDEX, '      const callMs = deadline === null ? timeoutMs : Math.max(1, Math.min(timeoutMs, deadline - now().getTime()));', '      const callMs = timeoutMs;')]},
+  {id: 'X23', what: 'a response served by another model is used (its tools run)', tests: [s('^XAI SDK R2: provenance before effects'), s('^XAI SDK R2: a response naming no served model')],
+    edits: [one(INDEX, '      if (plan.transport === "xai-sdk" && r.served_model !== plan.model) {', '      if (false) {')]},
+  {id: 'X24', what: 'a cost-looking field other than cost_in_usd_ticks is read as a cost', tests: [s('^XAI SDK R2: an undocumented cost-looking field')],
+    edits: [one(INDEX, '  const v = usage && typeof usage === "object" ? usage.cost_in_usd_ticks : undefined;', '  const v = usage && typeof usage === "object" ? (usage.cost_in_usd_ticks ?? usage.cost) : undefined;')]},
+  {id: 'X25', what: 'a failed request carries no cost reading (missing from the unavailable count)', tests: [s('^XAI SDK R2: cost is read only from')],
+    edits: [one(INDEX, '        ev.cost = costOf(null); // a failed request: its cost is unavailable, never a zero', '')]},
+  {id: 'X26', what: 'a missing counter passes the judge', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '  for (const k of ["provider_calls", "tool_calls"]) if (!wholeCount(t[k])) why.push(', '  for (const k of []) if (!wholeCount(t[k])) why.push(')]},
+  {id: 'X27', what: 'a malformed worktree check passes the judge', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '  else if (typeof w !== "object" || !Array.isArray(w.changed) || !Array.isArray(w.violations)) why.push(', '  else if (false) why.push(')]},
+  {id: 'X28', what: 'the gate\'s verdict is trusted over its own coverage facts', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '    if (t.coverage_gate?.ok && !g.ok) why.push(', '    if (false) why.push(')]},
+  {id: 'X29', what: 'the coverage is not checked against the assignment\'s testing limit', tests: [t('^XAI SDK ROUTE R2: a record with a required field removed')],
+    edits: [one(PR, '  if (!perms) why.push(`the assignment', '  if (false) why.push(`the assignment'),
+            one(PR, '    if (c && typeof c === "object" && typeof c.tests_allowed === "boolean" && c.tests_allowed !== allowed) why.push(', '    if (false) why.push(')]},
+  {id: 'X30', what: 'the coordinator judges without the assignment\'s row', tests: [t('^XAI SDK ROUTE: the complete coordinator path')],
+    edits: [one(PR, '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));', '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));')]},
+  // ---- round 3 (Codex's control at 1a7050f): the changed paths, not the violations summary, decide a clean review copy --
+  {id: 'X31', what: 'the judge takes the violations summary alone (the changed paths are not re-checked)', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(PR, '      for (const p of worktreeViolations(w.changed, { write_allowed: writable }))', '      for (const p of [])')]},
+  {id: 'X32', what: 'the judge re-checks the changed paths as if every assignment allowed writes', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(PR, '      const writable = perms.tools.includes("write_test");', '      const writable = true;')]},
+  {id: 'X33', what: 'the shared path policy lets a .. path out of .review-tests/', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(`${R}cli-common.mjs`, '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));', '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`)));')]},
+  // ---- round 4 (Codex's interaction case at 1a7050f): an identity-rejected response is never replayed or counted ---------
+  {id: 'X34', what: 'a continuation replays a response served by another model (or none)', tests: [s('^XAI SDK R4: a run stopped on a response from')],
+    edits: [one(INDEX, '      if (rejected || prior.identity_mismatch) {', '      if (false) {')]},
+  {id: 'X35', what: 'the judge trusts served_models over the recorded responses', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
+    edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    continue;')]},
+  {id: 'X36', what: 'a call naming another served model without its response body is not checked', tests: [t('^XAI SDK ROUTE R4: a recorded response served by another model')],
+    edits: [one(PR, '    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;', '    if (e?.type !== "provider_call" || !hasResponse) continue;')]},
+  // ---- round 5 (Codex's pass at 8942598): the routed judge derives its counts and coverage from the recorded events -----
+  {id: 'X37', what: 'the provider_calls counter is trusted over the recorded events', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts'), t('^XAI SDK ROUTE R5: a retry is a provider call'), s("^XAI SDK R5: the real runner's fresh run")],
+    edits: [one(PR, '  if (wholeCount(t.provider_calls) && t.provider_calls !== pc) why.push(', '  if (false) why.push(')]},
+  {id: 'X38', what: 'the bound max_turns is checked against the counter, not the recorded calls', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '  if (pc > L.max_turns) why.push(', '  if (t.provider_calls > L.max_turns) why.push(')]},
+  {id: 'X39', what: 'a continuation\'s counters are compared with every event (a valid continuation fails)', tests: [t('^XAI SDK ROUTE R5: a valid continuation'), s("^XAI SDK R5: the real runner's continuation")],
+    edits: [one(PR, '  const thisRun = lastCont >= 0 ? events.slice(lastCont + 1) : events;', '  const thisRun = events;')]},
+  {id: 'X40', what: 'a continuation\'s cumulative counts are not checked', tests: [t('^XAI SDK ROUTE R5: a valid continuation')],
+    edits: [one(PR, '      if (cu.provider_calls !== pcAll) why.push(', '      if (false) why.push(')]},
+  {id: 'X41', what: 'a run with no recorded response served by the bound model passes', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model) === reviewer.model))', '  if (false)')]},
+  {id: 'X42', what: 'the coverage summary is trusted over the recorded events', tests: [t('^XAI SDK ROUTE R5: the three summary-over-facts')],
+    edits: [one(PR, '      if (off.length) why.push(`the coverage summary contradicts', '      if (false) why.push(`the coverage summary contradicts')]},
+  {id: 'X43', what: 'a continued_from without its continuation event passes', tests: [t('^XAI SDK ROUTE R5: a valid continuation')],
+    edits: [one(PR, '  if (continued && lastCont < 0) why.push(', '  if (false) why.push(')]},
 ];
 
 const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
