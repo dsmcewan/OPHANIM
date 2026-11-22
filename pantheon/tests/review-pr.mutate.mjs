@@ -173,7 +173,16 @@ export const MUTATIONS = [
             one(PR, '    else if (typeof c.tests_allowed === "boolean" && c.tests_allowed !== testsAllowedBy(perms)) why.push(', '    else if (false) why.push(')]},
   {id: 'X30', what: 'the coordinator judges without the assignment\'s row', tests: [t('^XAI SDK ROUTE: the complete coordinator path')],
     edits: [one(PR, '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run, readmeRow }));', '    } else results.push(await judgeReviewer({ binding, reviewer, outDir, run }));')]},
-];const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
+  // ---- round 3 (Codex's control at 1a7050f): the changed paths, not the violations summary, decide a clean review copy --
+  {id: 'X31', what: 'the judge takes the violations summary alone (the changed paths are not re-checked)', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(PR, '      for (const p of worktreeViolations(w.changed, { write_allowed: writable }))', '      for (const p of [])')]},
+  {id: 'X32', what: 'the judge re-checks the changed paths as if every assignment allowed writes', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(PR, '      const writable = perms.tools.includes("write_test");', '      const writable = true;')]},
+  {id: 'X33', what: 'the shared path policy lets a .. path out of .review-tests/', tests: [t('^XAI SDK ROUTE R3: a changed path outside')],
+    edits: [one(`${R}cli-common.mjs`, '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`) && !p.split("/").includes("..")));', '  changed.filter(p => !(write_allowed && p.startsWith(`${REVIEW_TESTS_DIR}/`)));')]},
+];
+
+const arg = (name, dflt = null) => { const i = process.argv.indexOf(name); return i > 0 ? process.argv[i + 1] : dflt; };
 const WITHHELD = f => f.split('/').some(s => s.startsWith('findings-'));
 function copyTree(dest) {
   const files = execFileSync('git', ['-C', ROOT, 'ls-files', '-co', '--exclude-standard', '-z'], {encoding: 'utf8', maxBuffer: 1 << 28}).split('\0').filter(Boolean);

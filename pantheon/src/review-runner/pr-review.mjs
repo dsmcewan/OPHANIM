@@ -54,6 +54,7 @@ import { parseArgs } from "node:util";
 import { REVIEW_DIR_RE, assignmentRow, BriefError } from "./brief.mjs";
 import { coverageGate, testsAllowedBy } from "./coverage.mjs";
 import { permissionsFor } from "./tools.mjs";
+import { worktreeViolations } from "./cli-common.mjs";
 
 export const BINDING_SCHEMA = "ophanim.pr-review/v1";
 export const RESULT_SCHEMA = "ophanim.pr-review-result/v1";
@@ -372,6 +373,16 @@ function routedProblems(t, reviewer, b, readmeRow) {
   if (w === undefined || w === null) why.push("missing evidence: the transcript records no check of the review copy");
   else if (typeof w !== "object" || !Array.isArray(w.changed) || !Array.isArray(w.violations)) why.push("missing evidence: the check of the review copy is malformed (it needs its changed and violations lists)");
   else if (w.violations.length) why.push(`the review copy changed outside .review-tests/: ${w.violations.join(", ")}`);
+  else {
+    // The violations list is the runner's summary; the changed paths are the facts. They are re-checked here with the
+    // bound assignment's write permission and the runner's own path policy, so an empty summary is never taken alone.
+    const perms = readmeRow?.testing ? permissionsFor(readmeRow.testing, []) : null;
+    if (perms) {
+      const writable = perms.tools.includes("write_test");
+      for (const p of worktreeViolations(w.changed, { write_allowed: writable }))
+        why.push(`the review copy's changed paths contradict its violations list: ${p} is not allowed by the bound write policy${writable ? "" : " (this assignment allows no write)"}`);
+    }
+  }
   // The bounds: the bound limits, and whole-number counters within them.
   const diff = Object.keys(ROUTE_LIMITS).filter(k => t.limits?.[k] !== L[k]);
   if (diff.length) why.push(`the run's limits are not the bound limits (${diff.map(k => `${k} ${t.limits?.[k] ?? "none"} vs ${L[k]}`).join(", ")})`);

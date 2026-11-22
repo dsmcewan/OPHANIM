@@ -585,3 +585,26 @@ test("XAI SDK ROUTE R2: a record with a required field removed, malformed or con
   assert.equal(j.status, "incomplete");
   assert.match(j.why.join("; "), /the assignment's testing limit is not known here: the coverage cannot be checked against it/);
 });
+
+// Codex's independent control at 1a7050f (round 3): the worktree check's own `violations` summary is not evidence of a
+// clean review copy. The judge re-derives the violations from the CHANGED paths, with the bound assignment's write
+// permission and the runner's own path policy (cli-common.mjs worktreeViolations).
+test("XAI SDK ROUTE R3: a changed path outside .review-tests/ fails the judge even when the record's violations list is empty", async () => {
+  const wc = changed => t => ({ ...t, worktree_check: { changed, violations: [] } });
+  const judge = async (edit, row = ROW) => judgeReviewer({ binding: JB, reviewer: SDK_XAI, readmeRow: row, outDir: await sdkRun({ binding: JB, edit }), run: OK_RUN });
+  // The positive control: a reviewer-written test under .review-tests/, where the assignment allows writing one.
+  let j = await judge(wc([".review-tests/allowed.test.mjs"]));
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+  for (const p of ["ophanim/operate/account-refusal.mjs", ".review-tests/../ophanim/x.mjs", "review-tests/x.test.mjs", ".review-testsX/a.mjs"]) {
+    j = await judge(wc([".review-tests/allowed.test.mjs", p]));
+    assert.equal(j.status, "incomplete", p);
+    assert.match(j.why.join("; "), new RegExp(`the review copy's changed paths contradict its violations list: ${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} is not allowed by the bound write policy`), `${p}: ${j.why.join("; ")}`);
+  }
+  // The write-disabled assignment (source inspection only): even a .review-tests/ file is a violation.
+  const READONLY = { ...ROW, testing: "Source inspection and existing authorized tests only" };
+  j = await judge(wc([".review-tests/allowed.test.mjs"]), READONLY);
+  assert.equal(j.status, "incomplete");
+  assert.match(j.why.join("; "), /\.review-tests\/allowed\.test\.mjs is not allowed by the bound write policy \(this assignment allows no write\)/);
+  j = await judge(wc([]), READONLY);
+  assert.equal(j.status, "complete", JSON.stringify(j.why));
+});
