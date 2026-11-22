@@ -151,11 +151,20 @@ const armKey = a => canonical({ profile: a.profile, runOpts: a.runOpts ?? {} });
  *            without its calls is not a decided success)
  *   invalid  the summary is not a non-negative integer, or disagrees with the raw count: charged max(bound, raw),
  *            so a bad receipt never releases capacity, and the run decides nothing
+ *   invalid_raw  the attempt list is present but malformed (not a list, or an entry that is not an attempt object):
+ *            charged max(bound, entries); the run is recorded unread (its metrics would consume the bad list)
  *
  * `overrun`: the raw count exceeds the per-run bound the admission reserved, whatever the summary says.
  */
 export function chargeOf(run, bound) {
-  const raw = Array.isArray(run?.attempts) ? run.attempts.length : null;
+  const list = run?.attempts;
+  if (list !== undefined && list !== null && (!Array.isArray(list) || list.some(a => !a || typeof a !== "object" || Array.isArray(a)))) {
+    // Present but malformed: not a record of calls. Charged at least the bound; the run is recorded without being read.
+    const n = Array.isArray(list) ? list.length : 0;
+    return { raw: null, counted: Math.max(bound, n), basis: "invalid_raw", overrun: false,
+      why: `the run's attempt list is malformed (${Array.isArray(list) ? "an entry is not an attempt object" : `a ${typeof list}, not a list`}); ${Math.max(bound, n)} calls are charged and it decides nothing` };
+  }
+  const raw = Array.isArray(list) ? list.length : null;
   const summary = run?.resources?.provider_calls;
   const hasSummary = summary !== undefined && summary !== null;
   const overrun = raw !== null && raw > bound;
@@ -222,8 +231,8 @@ export async function compareArms({ tickets, arms, bounds, totalProviderCalls, r
       spent += c.counted;
       const acct = { provider_calls_raw: c.raw, provider_calls_counted: c.counted, provider_calls_basis: c.basis, provider_calls_before: before, provider_calls_overrun: c.overrun };
       if (c.overrun) overruns.push({ ticket: spec.key, arm: name, raw: c.raw, bound: B.maxProviderCalls });
-      if (error || !out?.run) {
-        row[name] = { ...unobservedRun({ profile: arm.label, why: error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),
+      if (error || !out?.run || c.basis === "invalid_raw") {
+        row[name] = { ...unobservedRun({ profile: arm.label, why: c.basis === "invalid_raw" ? c.why : error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),
           arm_profile: arm.profile, wall_ms, ...acct };
         continue;
       }

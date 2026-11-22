@@ -98,10 +98,10 @@ test("CLI --measure plan-title: refuses without a total boundary; writes a recor
 // is what is charged; a summary that disagrees with it, or is not a non-negative integer, makes the arm invalid
 // (inconclusive, deciding nothing) and is charged conservatively; with no raw list the run is charged at least its bound.
 const attempt = purpose => ({ purpose, vendor: "xai", model: "m", pool: "xai", outcome: "ok", usage: { input_tokens: 10, output_tokens: 2 } });
-const fakeRun = ({ attempts = 2, summary, shipped = true } = {}) => ({
+const fakeRun = ({ attempts = 2, summary, shipped = true, rawAttempts } = {}) => ({
   shipped, gates: shipped ? [{ gate: "REVIEW", ok: true }, { gate: "TESTS", ok: true }] : null, revisions: [{ rev: 1 }],
   started_at: "2026-11-22T00:00:00.000Z", finished_at: "2026-11-22T00:00:01.000Z", turns: [],
-  ...(attempts === null ? {} : { attempts: Array.from({ length: attempts }, (_, i) => attempt(`t${i}`)) }),
+  ...(rawAttempts !== undefined ? { attempts: rawAttempts } : attempts === null ? {} : { attempts: Array.from({ length: attempts }, (_, i) => attempt(`t${i}`)) }),
   resources: { usd: null, usd_basis: "unknown", ...(summary === undefined ? {} : { provider_calls: summary }) } });
 const keys = n => Array.from({ length: n }, (_, i) => ({ key: `k${i}`, goal: "g" }));
 async function measure({ n = 5, bound = 2, total = 2, shape }) {
@@ -191,3 +191,15 @@ test("raw budget: raw attempts past the per-run bound are an overrun even when t
   assert.equal(r.results.flatMap(x => [x.baseline.status, x.candidate.status]).filter(s => s === "not_run").length, 5);
   assert.match(arm(r, "k0", "candidate").why, /overran its per-run bound/);
 });
+
+for (const [label, rawAttempts] of [["{ count: 2 }", { count: 2 }], ["[null]", [null]]]) {
+  test(`raw budget: a malformed attempt list (${label}) is a settled, inconclusive record charged at least the bound; it is never read as a zero and admits nothing after it`, async () => {
+    const { r, admitted } = await measure({ shape: ({ arm }) => (arm === "baseline" ? { rawAttempts, summary: 0, shipped: true } : { attempts: 0 }) });
+    assert.deepEqual(admitted, ["k0:baseline"]);
+    assert.equal(verifyComparison(r).ok, true, "the comparison record is settled and verifies");
+    const b = arm(r, "k0", "baseline");
+    assert.deepEqual([...acct(b), b.status, b.accepted, b.provider_calls_before], [null, 2, "invalid_raw", "inconclusive", null, 0]);
+    assert.match(b.why, /attempt list is malformed/);
+    assert.deepEqual([arm(r, "k0", "candidate").status, r.spent_provider_calls, r.paired.pairs], ["not_run", 2, 0]);
+  });
+}
