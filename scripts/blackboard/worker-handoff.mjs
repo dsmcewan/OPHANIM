@@ -27,12 +27,20 @@
  * scheduler unlocks the verifier exactly as it does for any other delivery. No second scheduler, no review.
  *
  * Every refusal is { ok:false, code, why } and publishes nothing.
+ *
+ * #128: the receipt admitted is now the controller's own LAUNCH receipt (worker-launch.mjs), never the scratch
+ * containment probe -- a probe shows what a box could do, not that the worker ran in one. The launch must have
+ * been observed in-box, exited 0 within its bound, had exactly the scope writable, produced exactly this candidate
+ * (its patch is recomputed from the repository), and be within its lifetime. The delivery is durable: the receipt
+ * bytes land as a trace's blob in the SAME publish as the done item, and the item names the receipt's full
+ * digest and blob, so a fresh process can re-derive the evidence (verifyDelivery).
  */
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { openSync, readSync, closeSync, fstatSync, realpathSync, readFileSync, existsSync } from "node:fs";
 import { isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
-import { publish } from "../../pantheon/src/board/dag.mjs";
+import { publish, putBlob, treeSlots } from "../../pantheon/src/board/dag.mjs";
+import { LAUNCH_KIND, LAUNCH_MAX_TTL_MS, patchDigest } from "./worker-launch.mjs";
 import { boardState } from "../../pantheon/src/board/controller.mjs";
 
 export const RECEIPT_KIND = "ophanim.worker-handoff.receipt";
@@ -101,7 +109,7 @@ export function readReceipt({ root, name, sha256, maxBytes = RECEIPT_MAX_BYTES }
     if (got !== sha256) return no("RECEIPT_DIGEST", `receipt bytes hash to ${got}, not the controller's ${sha256}`);
     let json;
     try { json = JSON.parse(bytes.toString("utf8")); } catch (e) { return no("RECEIPT_SHAPE", `receipt is not JSON: ${e.message}`); }
-    return { ok: true, receipt: json, sha256: got, bytes: n };
+    return { ok: true, receipt: json, sha256: got, bytes: n, raw: Buffer.from(bytes) };
   } finally { if (fd !== undefined) closeSync(fd); }
 }
 
@@ -231,6 +239,80 @@ export function checkReceipt(receipt, { ticket, base, candidate, changed, scope,
   return { ok: true };
 }
 
+const isoMs = s => (typeof s === "string" && !Number.isNaN(Date.parse(s)) ? Date.parse(s) : null);
+
+/** The launch receipt must be the controller's observation of THIS worker run producing THIS candidate. */
+export function checkLaunch(receipt, { ticket, base, candidate, changed, scope, generations, patch, now = Date.now() }) {
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) return no("RECEIPT_SHAPE", "receipt must be a JSON object");
+  if (receipt.kind !== LAUNCH_KIND || receipt.v !== 1) {
+    return no("NO_LAUNCH", `the receipt is ${JSON.stringify(receipt.kind)}, not a controller launch receipt (${LAUNCH_KIND}/1): a containment probe or any other record does not show that a worker ran`);
+  }
+  if (hasEnvKey(receipt)) return no("RECEIPT_ENV", "a receipt carries observed outcomes, never environment values");
+  const o = receipt.outcome, ib = receipt.inbox;
+  if (!ib || !Number.isInteger(ib.pid) || !Array.isArray(ib.writable) || typeof ib.mounts_sha256 !== "string" || !["ok", "refused"].includes(ib.verdict)) {
+    return no("LAUNCH_UNOBSERVED", "no in-box observation of the launch: the worker's box was not seen to start");
+  }
+  if (ib.verdict !== "ok") return no("LAUNCH_SCOPE", `the in-box prelude refused before the worker ran: writable paths were ${JSON.stringify(ib.writable)}`);
+  if (!o || o.phase !== "worker_exited" || o.status !== 0 || o.killed_for !== null || o.launch_error !== null || (o.missing_scope ?? []).length) {
+    return no("LAUNCH_FAILED", `the launched worker did not complete: ${JSON.stringify(o)}`);
+  }
+  for (const [k, want] of [["ticket", ticket], ["base", base], ["candidate", candidate]]) {
+    if (receipt[k] !== want) return no("RECEIPT_FACTS", `receipt ${k} is ${JSON.stringify(receipt[k])}; observed ${JSON.stringify(want)}`);
+  }
+  if (!Array.isArray(receipt.scope) || !sameSet(receipt.scope, scope)) return no("RECEIPT_FACTS", `receipt scope ${JSON.stringify(receipt.scope)} is not the ticket scope`);
+  const g = receipt.generations;
+  if (!g || typeof g !== "object" || Array.isArray(g) || !sameSet(Object.keys(g), Object.keys(generations)) ||
+      !Object.entries(generations).every(([k, v]) => g[k] === v)) {
+    return no("RECEIPT_GENERATION", `receipt generations ${JSON.stringify(g)} are not the presented leases ${JSON.stringify(generations)}`);
+  }
+  if (!Array.isArray(receipt.changed_paths) || !sameSet(receipt.changed_paths, changed)) {
+    return no("RECEIPT_FACTS", `receipt changed_paths ${JSON.stringify(receipt.changed_paths)} differ from git's ${JSON.stringify(changed)}`);
+  }
+  if (receipt.patch_sha256 !== patch) return no("LAUNCH_PATCH", `the launched worker's patch was ${JSON.stringify(receipt.patch_sha256)}; this candidate's patch is ${patch}`);
+  if (!sameSet(ib.writable, scope)) return no("LAUNCH_SCOPE", `inside the box the writable paths were ${JSON.stringify(ib.writable)}, not the scope`);
+  const issued = isoMs(receipt.issued_at), expires = isoMs(receipt.expires_at);
+  if (issued === null || expires === null || expires < issued || expires - issued > LAUNCH_MAX_TTL_MS) return no("RECEIPT_LIFETIME", "the receipt's lifetime is missing or longer than the bound");
+  if (now < issued || now > expires) return no("RECEIPT_EXPIRED", `the receipt is valid ${receipt.issued_at}..${receipt.expires_at}; now is ${new Date(now).toISOString()}`);
+  return { ok: true };
+}
+
+/**
+ * Re-derive a delivery from the board alone, as a fresh process would: the done item names its receipt's digest and
+ * blob; the blob must hash to that digest and be the log of a trace that the delivering commit introduced.
+ */
+export function verifyDelivery({ store, refs, ref, key }) {
+  const state = boardState({ store, refs, ref });
+  const it = state.items.find(i => i.key === key);
+  if (!it || it.state !== "done") return no("NOT_DELIVERED", `${key} is not done on ${ref}`);
+  const d = it.delivery_receipt;
+  if (!d || !/^[0-9a-f]{64}$/.test(d.sha256 ?? "") || typeof d.blob !== "string" || typeof d.trace !== "string") return no("NO_EVIDENCE", `${key} is done but names no delivery receipt`);
+  let bytes;
+  try { bytes = store.get(d.blob); } catch (e) { return no("NO_EVIDENCE", `the receipt blob ${d.blob} cannot be read: ${e.message}`); }
+  const got = createHash("sha256").update(bytes).digest("hex");
+  if (got !== d.sha256) return no("EVIDENCE_DIGEST", `the receipt blob hashes to ${got}, not ${d.sha256}`);
+  const trace = store.get(d.trace);
+  if (trace?.kind !== "trace" || trace.links?.log !== d.blob) return no("NO_EVIDENCE", "the named trace does not log the receipt blob");
+  // The commit that moved the item to done must have introduced the trace.
+  let c = state.commit, found = false;
+  for (let i = 0; c && i < 10_000 && !found; i++) {
+    const node = store.get(c);
+    if ((node.records ?? []).includes(d.trace) && treeSlots(store, c)[`item:${key}`] === it.cid) found = true;
+    c = node.parents?.[0] ?? null;
+  }
+  if (!found) return no("NO_EVIDENCE", "no commit introduced the trace together with the delivered item");
+  let receipt;
+  try { receipt = JSON.parse(bytes.toString("utf8")); } catch (e) { return no("EVIDENCE_UNREADABLE", `the receipt blob is not readable JSON: ${e.message}`); }
+  // The receipt must be about THIS delivery: a genuine receipt co-committed with an item naming another candidate is
+  // evidence of a different delivery, not of this one.
+  if (!receipt || typeof receipt !== "object" || receipt.kind !== LAUNCH_KIND || receipt.v !== 1) return no("EVIDENCE_MISMATCH", "the receipt blob is not a launch receipt");
+  const mismatch = [["ticket", receipt.ticket, key], ["candidate", receipt.candidate, it.candidate_commit], ["base", receipt.base, it.base_sha]]
+    .find(([, a, b]) => a !== b);
+  if (mismatch) return no("EVIDENCE_MISMATCH", `the receipt's ${mismatch[0]} is ${JSON.stringify(mismatch[1])}; the delivered item says ${JSON.stringify(mismatch[2])}`);
+  if (!Array.isArray(receipt.scope) || !Array.isArray(it.write_scope) || !sameSet(receipt.scope, it.write_scope)) return no("EVIDENCE_MISMATCH", "the receipt's scope is not the item's write_scope");
+  if (receipt.outcome?.phase !== "worker_exited" || receipt.outcome?.status !== 0 || receipt.inbox?.verdict !== "ok") return no("EVIDENCE_MISMATCH", "the receipt does not record a completed, in-box-verified worker run");
+  return { ok: true, sha256: got, candidate: it.candidate_commit, receipt };
+}
+
 /**
  * Admit one external delivery.
  *
@@ -244,7 +326,7 @@ export function checkReceipt(receipt, { ticket, base, candidate, changed, scope,
  *   onValidated  optional observer called after every check and before the publish (a test seam for the
  *              fence-in-the-gap case; it is given nothing it could use to change the decision)
  */
-export async function admitHandoff({ board, ref, repo, ticket, holder, leases, receipt, request, onValidated = null }) {
+export async function admitHandoff({ board, ref, repo, ticket, holder, leases, receipt, request, onValidated = null, now = () => Date.now() }) {
   if (!ticket?.key || !Array.isArray(ticket.scope) || !ticket.scope.length) return no("TICKET_SHAPE", "ticket needs a key, a base and a non-empty scope");
   if (!request || request.ticket !== ticket.key) return no("WRONG_TICKET", `request names ticket ${JSON.stringify(request?.ticket)}, not ${ticket.key}`);
   const { base } = ticket, candidate = request.candidate;
@@ -283,7 +365,9 @@ export async function admitHandoff({ board, ref, repo, ticket, holder, leases, r
   const r = readReceipt(receipt ?? {});
   if (!r.ok) return r;
   const generations = Object.fromEntries([item, ...scopes].map(l => [l.resource, l.gen]));
-  const rc = checkReceipt(r.receipt, { ticket: ticket.key, base, candidate, changed: g.changed, scope: ticket.scope, generations });
+  let patch;
+  try { patch = patchDigest(repo, base, candidate); } catch (e) { return no("DIFF_FAILED", `cannot recompute the candidate's patch: ${e.message}`); }
+  const rc = checkLaunch(r.receipt, { ticket: ticket.key, base, candidate, changed: g.changed, scope: ticket.scope, generations, patch, now: now() });
   if (!rc.ok) return rc;
 
   if (onValidated) await onValidated({ ticket: ticket.key, candidate });
@@ -291,9 +375,17 @@ export async function admitHandoff({ board, ref, repo, ticket, holder, leases, r
   // The native transition. `expect` pins the board head this decision was made on; `leases` makes every
   // scope generation part of the same locked landing as the item lease.
   const { cid: _cid, slot: _slot, links: _links, ...payload } = it;
+  // Durable in the same CAS: the receipt bytes as a trace's log, and the done item naming that digest, blob and trace.
+  const blob = putBlob(board.store, r.raw);
+  const traceSpec = { kind: "trace", payload: { test: `worker launch ${r.receipt.run_id} for ${ticket.key}` }, blob: r.raw };
+  const { putEntry } = await import("../../pantheon/src/board/dag.mjs");
+  const { KINDS } = await import("../../pantheon/src/board/schema.mjs");
+  const traceCid = putEntry(board.store, { kind: "trace", level: KINDS.trace.level, payload: traceSpec.payload, links: { log: blob }, author: holder, visibility: "board" }).cid;
   const res = await publish({ ...board, ref, author: holder, lease: item, leases: scopes, expect: state.commit,
-    msg: `external delivery ${ticket.key} at ${candidate} (receipt ${r.sha256.slice(0, 12)})`,
-    entries: [{ kind: "work_item", payload: { ...payload, state: "done", candidate_commit: candidate } }] });
+    msg: `external delivery ${ticket.key} at ${candidate} (launch receipt ${r.sha256})`,
+    entries: [traceSpec,
+      { kind: "work_item", payload: { ...payload, state: "done", candidate_commit: candidate, delivery_receipt: { sha256: r.sha256, blob, trace: traceCid } } }] });
   if (!res.ok) return no(res.code ?? "PUBLISH_REFUSED", res.why, { resource: res.resource });
-  return { ok: true, commit: res.commit, candidate, changed: g.changed, receipt_sha256: r.sha256 };
+  if (!res.written.some(w => w.cid === traceCid)) return no("TRACE_MISMATCH", "the published trace is not the one the item names");
+  return { ok: true, commit: res.commit, candidate, changed: g.changed, receipt_sha256: r.sha256, trace: traceCid, blob };
 }
