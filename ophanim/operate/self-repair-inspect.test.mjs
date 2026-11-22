@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {tick} from './scheduler.mjs';
-import {spawnSync} from 'node:child_process';
+import {spawnSync, spawn} from 'node:child_process';
 import * as lane from './self-repair.mjs';
 import {readRecords, detect, inspectionState, inspectionDirOf, inspectIdle, writeRecord, INSPECTION_SCHEMA, DEFAULT_CONFIG} from './self-repair.mjs';
 import {runInspection, changedTests, fill} from './self-repair-inspect.mjs';
@@ -35,7 +35,8 @@ const completeAttempt = (f, commit, {at = '2026-11-20T00:00:00.000Z'} = {}) => {
 const writeInspection = (f, name, body) => { fs.mkdirSync(inspectionDirOf(f.stateDir), {recursive: true}); fs.writeFileSync(path.join(inspectionDirOf(f.stateDir), name), JSON.stringify(body)); };
 const writer = body => ['node', '-e', `require('fs').writeFileSync(process.argv[process.argv.length - 1], ${JSON.stringify(JSON.stringify(body))})`];
 const PENTEST_STUB = ['node', '-e', `process.stdout.write(${JSON.stringify(PENTEST_OK)})`];
-const idle = (f, starts, over = {}) => inspectIdle({repo: f.repo, state: f.stateDir, head: over.head ?? f.head, records: f.records, start: plan => { starts.push(plan); return over.pid ?? 2 ** 22 + 7; },
+// over.inspector (the test's `t`): the start launches a stand-in inspector whose argv carries the attempt token.
+const idle = (f, starts, over = {}) => inspectIdle({repo: f.repo, state: f.stateDir, head: over.head ?? f.head, records: f.records, start: plan => { starts.push(plan); return over.inspector ? stubInspector(over.inspector, f, plan.token) : over.pid ?? 2 ** 22 + 7; },
   at: () => over.at ?? new Date().toISOString(), ...(over.config ? {config: over.config} : {})});
 const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid;
 /** An idle lane: nothing in the register, no gate record, a commit that carries the gate tool. */
@@ -57,8 +58,10 @@ test('loop: an idle lane (nothing to repair, no round open) starts a self-inspec
 
 test('loop: one inspection at a time -- while one runs, the next tick does not start another', async t => {
   const f = idleRepo(t), starts = [];
-  await tickWith(f, starts);
-  const r = await tickWith(f, starts);
+  // The running inspector is a live process whose argv carries the attempt's token (#100), not this test process.
+  const inspector = {selfRepair: {startInspection: plan => { starts.push(plan); return stubInspector(t, f, plan.token); }}};
+  await tickWith(f, starts, inspector);
+  const r = await tickWith(f, starts, inspector);
   assert.equal(r.self_repair.inspection.state, 'running');
   assert.equal(starts.length, 1);
 });
@@ -192,10 +195,10 @@ test('recovery: an inspector that died without its result is recorded as an inte
   assert.equal(running, null, 'the dead inspector\'s running.json is removed');
   assert.deepEqual([last.commit, last.attempt, last.complete, last.recovered_at], [f.head, 1, false, now]);
   assert.match(last.steps[0].error, new RegExp(`interrupted: the inspector \\(pid ${pid}\\)`));
-  const later = idle(f, starts, {at: new Date(Date.parse(now) + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString(), pid: process.pid});
+  const later = idle(f, starts, {at: new Date(Date.parse(now) + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString(), inspector: t});
   assert.deepEqual([later.state, later.attempt, starts.length], ['retrying', 2, 1]);
   const beside = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
-  assert.deepEqual([beside.state, beside.pid, starts.length], ['running', process.pid, 1], 'the live inspector (this process) blocks a second start');
+  assert.deepEqual([beside.state, beside.pid, beside.identity, starts.length], ['running', later.pid, 'verified', 1], 'the live inspector (its argv carries the token) blocks a second start');
 });
 
 test('legacy state: a last.json written before the rule (no attempt) is judged by its evidence -- one with no reports cannot establish completeness and is retried; one whose reports are on disk is honoured', async t => {
@@ -267,4 +270,107 @@ test('Detect reads a historical gate record with malformed rows: it does not thr
   assert.deepEqual(d.defects.map(x => x.id), ['test:test/calc.test.mjs::adds']);
   assert.deepEqual(d.ignored.map(x => x.why.replace(/^a gate row is not readable: /, '')),
     ['results[0] is not a suite row', 'results[1] is not a suite row', 'results[2] (x): its notes or problems are not lists of text']);
+});
+
+// ---- WORKER IDENTITY (#100): a live pid is not an inspector unless the process's own argv carries the attempt's token ----
+const INSPECTOR_PATH = path.join(path.dirname(new URL(import.meta.url).pathname), 'self-repair-inspect.mjs');
+/** A stand-in inspector: a live process whose argv is the inspector's (script, --plan <plan.json>, --token <token>). */
+const stubInspector = (t, f, token) => {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', INSPECTOR_PATH, '--plan', path.join(inspectionDirOf(f.stateDir), 'plan.json'), '--token', token], {stdio: 'ignore'});
+  t.after(() => { try { child.kill('SIGKILL'); } catch {} });
+  return child.pid;
+};
+const runningRecord = (f, over) => writeInspection(f, 'running.json', {schema: INSPECTION_SCHEMA, commit: f.head, since: null, attempt: 1, started_at: new Date().toISOString(), ...over});
+
+test('identity: a verified current inspector (its argv carries the recorded token) suppresses a duplicate launch', async t => {
+  const f = idleRepo(t), starts = [], token = 'b7a7a0de-0000-4000-8000-000000000001';
+  runningRecord(f, {pid: stubInspector(t, f, token), token});
+  await new Promise(r => setTimeout(r, 150));
+  const r = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  assert.deepEqual([r.state, r.identity, starts.length], ['running', 'verified', 0], JSON.stringify(r));
+});
+
+test('identity: a live unrelated process in the record (this harness, a token it does not carry, a claimed start in 2000) is recovered as interrupted -- it is not signalled, and the next attempt is due on the usual cadence', async t => {
+  const f = idleRepo(t), starts = [];
+  runningRecord(f, {pid: process.pid, token: 'b7a7a0de-0000-4000-8000-000000000002', started_at: '2000-01-01T00:00:00.000Z'});
+  const killed = [];
+  const realKill = process.kill;
+  process.kill = (pid, sig) => { killed.push([pid, sig]); return realKill.call(process, pid, sig); };
+  try {
+    const now = '2026-11-22T06:00:00.000Z';
+    const r = idle(f, starts, {at: now});
+    assert.deepEqual([r.state, r.recovered?.result, r.recovered?.identity, starts.length], ['retry-wait', 'interrupted', 'mismatch', 0], JSON.stringify(r));
+    assert.deepEqual(killed.filter(([pid, sig]) => pid === process.pid && sig !== 0), [], 'no signal is sent to the unrelated process');
+    const later = idle(f, starts, {at: new Date(Date.parse(now) + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString()});
+    assert.deepEqual([later.state, later.attempt, starts.length], ['retrying', 2, 1]);
+  } finally { process.kill = realKill; }
+});
+
+test('identity: a real inspector process with ANOTHER attempt\'s token is a mismatch, recovered, not a running inspector', async t => {
+  const f = idleRepo(t), starts = [];
+  runningRecord(f, {pid: stubInspector(t, f, 'b7a7a0de-0000-4000-8000-00000000000a'), token: 'b7a7a0de-0000-4000-8000-00000000000b'});
+  await new Promise(r => setTimeout(r, 150));
+  const r = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  assert.deepEqual([r.state === 'running', r.recovered?.identity], [false, 'mismatch'], JSON.stringify(r));
+});
+
+test('identity: both running.json writers record the attempt token -- the lane before and after the launch, the inspector with its own pid; the spawned argv carries it', async t => {
+  const f = idleRepo(t), starts = [];
+  const r = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  const token = starts[0]?.token;
+  assert.match(String(token), /^[0-9a-f-]{36}$/, 'the plan carries a token');
+  assert.deepEqual([r.state, inspectionState(f.stateDir).running.token], ['started', token]);
+  const lane = await import('./self-repair.mjs');
+  assert.deepEqual(lane.inspectorArgv('/x/plan.json', token), [INSPECTOR_PATH, '--plan', '/x/plan.json', '--token', token], 'the spawned argv is the inspector, its plan and the token');
+  const inspect = {...DEFAULT_CONFIG.inspect, gates: [...writer(GATE_PASS), '{json}'], pentest: PENTEST_STUB, nice: null, timeout_ms: 60_000};
+  let seen = null;
+  const plan = {schema: INSPECTION_SCHEMA, repo: f.repo, commit: f.head, since: null, attempt: 1, token, records: f.records, state: f.stateDir, inspect};
+  await runInspection(plan, {log: line => { if (!seen) seen = inspectionState(f.stateDir).running; }});
+  assert.deepEqual([seen?.token, seen?.pid], [token, process.pid], 'the inspector\'s own record: the same token, its own pid');
+  assert.equal(inspectionState(f.stateDir).last.token, token, 'its result names the attempt');
+});
+
+test('identity: a very fast finish -- the inspector completes before the lane records its pid -- leaves the complete result standing, not an interrupted one', async t => {
+  const f = idleRepo(t), starts = [];
+  const finishing = plan => {
+    starts.push(plan);
+    const body = {...completeAttempt(f, plan.commit), token: plan.token};
+    body.complete = true; body.incomplete = [];
+    writeInspection(f, 'last.json', body); writeInspection(f, 'complete.json', body);
+    fs.rmSync(path.join(inspectionDirOf(f.stateDir), 'running.json'), {force: true});
+    return spawnSync(process.execPath, ['-e', '0']).pid;
+  };
+  const r = inspectIdle({repo: f.repo, state: f.stateDir, head: f.head, records: f.records, start: finishing, at: () => '2030-01-01T00:00:00.000Z'});
+  assert.equal(r.state, 'started');
+  const again = idle(f, starts, {at: '2030-01-01T00:01:00.000Z'});
+  assert.equal(again.state, 'already-inspected', JSON.stringify(again));
+  assert.equal(inspectionState(f.stateDir).last.complete, true, 'last.json is still the complete result');
+  assert.equal(starts.length, 1);
+});
+
+test('identity: a legacy record with no token and a live pid is conservative within the finite attempt envelope, labelled unverified, and recovered after it', async t => {
+  const f = idleRepo(t), starts = [];
+  const lane = await import('./self-repair.mjs');
+  const envelope = lane.attemptEnvelopeMs(DEFAULT_CONFIG.inspect);
+  assert.equal(envelope, 3 * DEFAULT_CONFIG.inspect.timeout_ms + 10 * 60_000);
+  const started_at = '2026-11-22T00:00:00.000Z';
+  runningRecord(f, {pid: process.pid, started_at});
+  const within = idle(f, starts, {at: new Date(Date.parse(started_at) + envelope - 1000).toISOString()});
+  assert.deepEqual([within.state, within.identity, starts.length], ['running', 'unverified', 0], JSON.stringify(within));
+  assert.match(within.identity_why, /no identity token/);
+  const after = idle(f, starts, {at: new Date(Date.parse(started_at) + envelope + 1000).toISOString()});
+  assert.deepEqual([after.recovered?.result, after.recovered?.identity], ['interrupted', 'expired'], JSON.stringify(after));
+});
+
+test('identity: where the process table cannot be read (no /proc, as on macOS or Windows) a live pid is unverified -- running within the envelope, recovered after it', async t => {
+  const f = idleRepo(t), starts = [];
+  const lane = await import('./self-repair.mjs');
+  const started_at = '2026-11-22T00:00:00.000Z', envelope = lane.attemptEnvelopeMs(DEFAULT_CONFIG.inspect);
+  runningRecord(f, {pid: process.pid, token: 'b7a7a0de-0000-4000-8000-00000000000c', started_at});
+  const procfs = path.join(f.root ?? f.repo, 'no-such-proc');
+  const within = inspectIdle({repo: f.repo, state: f.stateDir, head: f.head, records: f.records, start: () => 1, at: () => new Date(Date.parse(started_at) + 1000).toISOString(), procfs});
+  assert.deepEqual([within.state, within.identity], ['running', 'unverified'], JSON.stringify(within));
+  assert.match(within.identity_why, /process table/);
+  const after = inspectIdle({repo: f.repo, state: f.stateDir, head: f.head, records: f.records, start: () => 1, at: () => new Date(Date.parse(started_at) + envelope + 1000).toISOString(), procfs});
+  assert.equal(after.recovered?.identity, 'expired', JSON.stringify(after));
 });
