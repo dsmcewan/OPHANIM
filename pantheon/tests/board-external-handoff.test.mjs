@@ -5,12 +5,15 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { publish, boardState, schedule } from "../src/board/index.mjs";
 import { withBoard, seeded, CONTROLLER } from "./board-helper.mjs";
 import { admitHandoff, observeContainment, probeOutcome, RECEIPT_KIND } from "../../scripts/blackboard/worker-handoff.mjs";
+import { sandboxAvailable } from "../src/agy/sandbox.mjs";
+import { designated } from "../../scripts/test-gates/real-bwrap.mjs";
 
 const KEY = "runtime-external-worker-adapter";
 const SCOPE = ["pantheon/src/board/dag.mjs", "pantheon/src/board/refs.mjs",
@@ -44,11 +47,11 @@ function makeRepo() {
   return { dir, base, good, grandchild, offScope, wrongParent, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-/** A controller-recorded probe set: exit and the bytes' digests before and after each write. */
-const recordedProbes = () => ([
-  { path: SCOPE[3], exit: 0, before: sha("a"), after: sha("a+probe") },
-  { path: OUTSIDE, exit: 1, before: sha("b"), after: sha("b") },
-]);
+/** A controller-recorded probe set: for each disposable fixture, the exit, the bytes' digests before and
+ *  after, and the in-box operation's own machine-readable result. */
+const POSITIVE = { fixture: "positive", path: "positive.txt", exit: 0, before: sha("a"), after: sha("a+probe"), inbox: { ran: true, result: "written" } };
+const DENIAL = { fixture: "denial", path: "denial.txt", exit: 0, before: sha("b"), after: sha("b"), inbox: { ran: true, result: "denied", errno: "EROFS" } };
+const recordedProbes = () => ([{ ...POSITIVE, inbox: { ...POSITIVE.inbox } }, { ...DENIAL, inbox: { ...DENIAL.inbox } }]);
 
 async function scenario(fn) {
   const repo = makeRepo();
@@ -213,10 +216,10 @@ test("paired control (generation): a genuine receipt from the previous grant fai
   });
 });
 
-test("paired control (observed write): only the refused probe's recorded exit and bytes change, and admission refuses without moving the ref", async () => {
+test("paired control (observed write): only the denial fixture's recorded in-box result and bytes change, and admission refuses without moving the ref", async () => {
   await scenario(async s => {
     const breach = s.receiptOf();
-    breach.containment = { ...breach.containment, probes: [breach.containment.probes[0], { path: OUTSIDE, exit: 0, before: sha("b"), after: sha("b+probe") }] };
+    breach.containment = { ...breach.containment, probes: [POSITIVE, { ...DENIAL, after: sha("b+probe"), inbox: { ran: true, result: "written" } }] };
     const head = s.board.refs.resolve(s.ctx.ref);
     await refuses(s, await s.admit({ receipt: s.writeReceipt(breach) }), "CONTAINMENT_BREACH");
     assert.equal(s.board.refs.resolve(s.ctx.ref), head);
@@ -224,32 +227,81 @@ test("paired control (observed write): only the refused probe's recorded exit an
   });
 });
 
-test("probe outcomes are derived from exit and bytes: self-contradicting, duplicate-path and one-sided probe sets are refused", async () => {
-  assert.deepEqual(probeOutcome({ path: "a", exit: 0, before: null, after: sha("x") }), { ok: true, outcome: "allowed" });
-  assert.deepEqual(probeOutcome({ path: "a", exit: 1, before: null, after: null }), { ok: true, outcome: "refused" });
-  assert.equal(probeOutcome({ path: "a", exit: 0, before: sha("x"), after: sha("x") }).code, "RECEIPT_CONTAINMENT");
-  assert.equal(probeOutcome({ path: "a", exit: 2, before: sha("x"), after: sha("y") }).code, "RECEIPT_CONTAINMENT");
-  assert.equal(probeOutcome({ path: "a", expected: "allowed", observed: "allowed" }).code, "RECEIPT_CONTAINMENT");
+test("probe outcomes are derived from the in-box result, the exit and the bytes; a denial needs an existing target and EROFS from the operation itself", async () => {
+  assert.deepEqual(probeOutcome(POSITIVE), { ok: true, outcome: "allowed" });
+  assert.deepEqual(probeOutcome(DENIAL), { ok: true, outcome: "denied" });
+  // Not denial evidence: a missing target (the real "Directory nonexistent" holdout), a different errno, no in-box
+  // result at all (bwrap never started, timed out, or the inner probe never ran), or bytes that changed.
+  const notEvidence = [
+    ["missing target", { ...DENIAL, before: null, after: null, inbox: { ran: true, result: "denied", errno: "ENOENT" } }],
+    ["EROFS on a target that did not exist", { ...DENIAL, before: null, after: null }],
+    ["EACCES is not the write policy", { ...DENIAL, inbox: { ran: true, result: "denied", errno: "EACCES" } }],
+    ["launch failure: no in-box result", { ...DENIAL, exit: 1, inbox: null }],
+    ["timeout: no in-box result", { ...DENIAL, exit: -1, inbox: null }],
+    ["a bare exit and unchanged bytes (the earlier shape)", { path: "denial.txt", exit: 2, before: sha("b"), after: sha("b") }],
+    ["denied but the bytes changed", { ...DENIAL, after: sha("b+probe") }],
+    ["written but nothing changed", { ...POSITIVE, after: POSITIVE.before }],
+    ["written to a target that did not exist", { ...POSITIVE, before: null }],
+    ["a free-form label", { fixture: "denial", path: "denial.txt", expected: "refused", observed: "refused" }],
+  ];
+  for (const [why, p] of notEvidence) assert.equal(probeOutcome(p).code, "RECEIPT_CONTAINMENT", why);
   await scenario(async s => {
     const with_ = probes => s.writeReceipt(s.receiptOf({ containment: { tool: "bwrap", network: "unshared", probes } }));
-    const [inP, outP] = [s.receiptOf().containment.probes[0], s.receiptOf().containment.probes[1]];
-    await refuses(s, await s.admit({ receipt: with_([inP, { ...inP, exit: 1, after: inP.before }]) }), "RECEIPT_CONTAINMENT");
-    await refuses(s, await s.admit({ receipt: with_([inP]) }), "RECEIPT_CONTAINMENT");
-    await refuses(s, await s.admit({ receipt: with_([outP]) }), "RECEIPT_CONTAINMENT");
-    await refuses(s, await s.admit({ receipt: with_([{ ...inP, exit: 1, after: inP.before }, outP]) }), "RECEIPT_CONTAINMENT");
+    for (const [why, p] of notEvidence) await refuses(s, await s.admit({ receipt: with_([POSITIVE, p]) }), "RECEIPT_CONTAINMENT").catch(e => { throw new Error(`${why}: ${e.message}`); });
+    await refuses(s, await s.admit({ receipt: with_([POSITIVE, { ...DENIAL, path: POSITIVE.path }]) }), "RECEIPT_CONTAINMENT");
+    await refuses(s, await s.admit({ receipt: with_([POSITIVE]) }), "RECEIPT_CONTAINMENT");
+    await refuses(s, await s.admit({ receipt: with_([DENIAL]) }), "RECEIPT_CONTAINMENT");
+    await refuses(s, await s.admit({ receipt: with_([{ ...POSITIVE, fixture: "denial" }, DENIAL]) }), "CONTAINMENT_BREACH");
   });
 });
 
-const hasBwrap = (() => { try { execFileSync("bwrap", ["--ro-bind", "/", "/", "true"], { stdio: "ignore", timeout: 10_000 }); return true; } catch { return false; } })();
+const SELF = fileURLToPath(import.meta.url);
+const have = await sandboxAvailable("bwrap");
 
-test("real box: the controller's own bwrap probe allows the scoped write, refuses the other, and that receipt is admitted",
-  { skip: hasBwrap ? false : "bwrap is not usable on this host" }, async () => {
-  await scenario(async s => {
-    const containment = observeContainment({ root: s.repo.dir, scope: [SCOPE[3]], probe: [SCOPE[3], OUTSIDE] });
-    assert.deepEqual(containment.probes.map(p => [p.path, p.exit === 0, p.before !== p.after]),
-      [[SCOPE[3], true, true], [OUTSIDE, false, false]]);
-    const res = await s.admit({ receipt: s.writeReceipt(s.receiptOf({ containment })) });
-    assert.equal(res.ok, true, res.why);
-    assert.equal(s.verifyReady(), 1);
-  });
+test("gate: this file is a gate-recognized real-bwrap suite", () => {
+  assert.deepEqual(designated([SELF]), { gated: [SELF], ungated: [] });
+});
+
+/** Disposable fixtures in a scratch root of their own -- never the candidate checkout. */
+function scratch() {
+  const root = mkdtempSync(join(tmpdir(), "handoff-probe-"));
+  writeFileSync(join(root, "positive.txt"), "a\n");
+  writeFileSync(join(root, "denial.txt"), "b\n");
+  return root;
+}
+
+test("real box: the allowed fixture is written and the unbound one is denied EROFS by the in-box operation; that receipt is admitted",
+  { skip: have.ok ? false : have.why }, async () => {
+  const root = scratch();
+  try {
+    const containment = observeContainment({ root, positive: "positive.txt", denial: ["denial.txt"] });
+    assert.deepEqual(containment.probes.map(p => [p.fixture, p.path, p.exit, p.inbox]), [
+      ["positive", "positive.txt", 0, { ran: true, result: "written" }],
+      ["denial", "denial.txt", 0, { ran: true, result: "denied", errno: "EROFS" }],
+    ]);
+    assert.equal(readFileSync(join(root, "denial.txt"), "utf8"), "b\n");
+    await scenario(async s => {
+      const res = await s.admit({ receipt: s.writeReceipt(s.receiptOf({ containment })) });
+      assert.equal(res.ok, true, res.why);
+      assert.equal(s.verifyReady(), 1);
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("real box: a denial target under a missing directory, and a box that never starts, attest nothing",
+  { skip: have.ok ? false : have.why }, async () => {
+  const root = scratch();
+  try {
+    const missing = observeContainment({ root, positive: "positive.txt", denial: ["nodir/x.txt"] });
+    const m = missing.probes[1];
+    assert.equal(m.before, null); assert.equal(m.after, null); assert.equal(m.inbox.result, "denied");
+    assert.notEqual(m.inbox.errno, "EROFS");
+    const dead = observeContainment({ root: join(root, "does-not-exist"), positive: "positive.txt", denial: ["denial.txt"] });
+    assert.deepEqual(dead.probes.map(p => p.inbox), [null, null]);
+    assert.notEqual(dead.probes[1].exit, 0);
+    await scenario(async s => {
+      await refuses(s, await s.admit({ receipt: s.writeReceipt(s.receiptOf({ containment: missing })) }), "RECEIPT_CONTAINMENT");
+      await refuses(s, await s.admit({ receipt: s.writeReceipt(s.receiptOf({ containment: dead })) }), "RECEIPT_CONTAINMENT");
+    });
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });

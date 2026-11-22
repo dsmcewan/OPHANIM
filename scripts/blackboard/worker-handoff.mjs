@@ -16,9 +16,11 @@
  *   receipt  -- read from a controller-owned root, confined to it, bounded, and equal to a digest the
  *               CONTROLLER supplies. Its facts -- ticket, base, candidate, changed paths and the item and
  *               scope GENERATIONS it was observed under -- must equal what is observed and presented now.
- *               Its containment probes record a command exit and the file's bytes before and after; the
- *               outcome is derived from those (probeOutcome), never labelled, and must include an in-scope
- *               write that was allowed and an out-of-scope write, on a different path, that was refused.
+ *               Its containment probes record, per disposable fixture, the in-box operation's own result, the
+ *               exit and the bytes before and after; the outcome is derived from those (probeOutcome), never
+ *               labelled. It must include the positive control written and an existing denial fixture refused
+ *               EROFS by the in-box write itself. A missing target, a box that never started or timed out, or
+ *               any other errno attests nothing.
  *
  * What the worker supplies is only { ticket, candidate }. Its word on paths, generations or containment is
  * never read. Then, and only then, the item moves to `done` through the native publish(), and the native
@@ -107,45 +109,85 @@ const hasEnvKey = v => v && typeof v === "object" &&
   Object.entries(v).some(([k, x]) => /^env(ironment)?$/i.test(k) || hasEnvKey(x));
 
 /**
- * A probe's outcome is DERIVED, never labelled: { path, exit, before, after } where before/after are the
- * sha256 of the file's bytes (null when absent). Exit 0 with the bytes changed is "allowed"; a non-zero exit
- * with the bytes unchanged is "refused"; anything else (exit 0 and nothing changed, or a failure that still
- * changed the file) contradicts itself and is refused as evidence.
+ * A probe's outcome is DERIVED, never labelled. A probe is
+ *   { fixture: "positive"|"denial", path, exit, before, after, inbox }
+ * where before/after are the sha256 of the fixture's bytes (null when absent) and `inbox` is the in-box
+ * operation's own machine-readable result -- { ran: true, result: "written" } or { ran: true, result:
+ * "denied", errno } -- or null when no such result came back (bwrap never started, it timed out, or the inner
+ * operation never ran). A null inbox is ABSENCE of evidence, never a denial.
+ *
+ *   allowed  inbox written, exit 0, the target existed before, and its bytes changed
+ *   denied   inbox denied with errno EROFS (the write policy), exit 0, the target existed before, bytes unchanged
+ *
+ * Everything else attests nothing: a missing target ("Directory nonexistent" gives the same shell status as a
+ * read-only file and must not count), ENOENT, EACCES or any other errno, a bare exit, changed bytes on a
+ * denial, unchanged bytes on a write.
  */
 export function probeOutcome(p) {
-  if (!p || typeof p.path !== "string" || !p.path || !Number.isInteger(p.exit) ||
-      !(p.before === null || HASH.test(p.before)) || !(p.after === null || HASH.test(p.after))) {
-    return no("RECEIPT_CONTAINMENT", `a probe is { path, exit: integer, before, after: sha256|null }; got ${JSON.stringify(p)}`);
+  const bad = why => no("RECEIPT_CONTAINMENT", `probe ${JSON.stringify(p?.path)} attests nothing: ${why}`);
+  if (!p || typeof p !== "object" || !["positive", "denial"].includes(p.fixture) || typeof p.path !== "string" || !p.path ||
+      !Number.isInteger(p.exit) || !(p.before === null || HASH.test(p.before)) || !(p.after === null || HASH.test(p.after)) ||
+      !("inbox" in p)) {
+    return bad(`a probe is { fixture: positive|denial, path, exit: integer, before, after: sha256|null, inbox }; got ${JSON.stringify(p)}`);
   }
+  const ib = p.inbox;
+  if (ib === null) return bad(`no in-box result (exit ${p.exit}): the box did not start, timed out, or the probe never ran`);
+  if (typeof ib !== "object" || ib.ran !== true || !["written", "denied"].includes(ib.result)) return bad(`malformed in-box result ${JSON.stringify(ib)}`);
+  if (p.exit !== 0) return bad(`the in-box probe exited ${p.exit}`);
+  if (p.before === null) return bad("the target did not exist before the probe; only an existing fixture can show the write policy");
   const changed = p.before !== p.after;
-  if (p.exit === 0 && changed) return { ok: true, outcome: "allowed" };
-  if (p.exit !== 0 && !changed) return { ok: true, outcome: "refused" };
-  return no("RECEIPT_CONTAINMENT", `probe ${p.path} contradicts itself: exit ${p.exit} with the file ${changed ? "changed" : "unchanged"}`);
+  if (ib.result === "written") return changed ? { ok: true, outcome: "allowed" } : bad("the in-box write reported success but the bytes did not change");
+  if (ib.errno !== "EROFS") return bad(`the in-box write failed with ${JSON.stringify(ib.errno)}, not the read-only write policy (EROFS)`);
+  return changed ? bad("the write was reported denied but the bytes changed") : { ok: true, outcome: "denied" };
 }
 
 const digestOf = f => existsSync(f) ? createHash("sha256").update(readFileSync(f)).digest("hex") : null;
+const INBOX_KEYS = { written: ["ran", "result"], denied: ["errno", "ran", "result"] };
+// The in-box operation: append one line to the fixture and report what the kernel said, as one JSON line.
+const PROBE_JS = 'const fs=require("fs");let r;try{const fd=fs.openSync(process.argv[1],"a");fs.writeSync(fd,"probe\\n");' +
+  'fs.closeSync(fd);r={ran:true,result:"written"}}catch(e){r={ran:true,result:"denied",errno:e.code??null}}' +
+  'process.stdout.write(JSON.stringify(r)+"\\n")';
+function parseInbox(out) {
+  const lines = String(out ?? "").split("\n").filter(Boolean);
+  if (lines.length !== 1) return null;
+  try {
+    const r = JSON.parse(lines[0]);
+    const keys = INBOX_KEYS[r?.result];
+    return keys && Object.keys(r).sort().join() === keys.join() && r.ran === true ? r : null;
+  } catch { return null; }
+}
+const fixtureName = n => typeof n === "string" && n && !isAbsolute(n) && !n.split(/[\\/]/).includes("..");
 
 /**
- * The controller's own observation of a box: one real write per path, each in a fresh bwrap box that
- * mounts the host read-only, unshares the network, and binds ONLY `scope` writable under `root`. The
- * recorded exit and the bytes before and after are what probeOutcome() reads. `network` records the flag
- * this function itself passed, not a claim from anyone else.
+ * The controller's own observation of a box, on DISPOSABLE fixtures in a scratch root of the controller's (never
+ * the candidate checkout, so the probe writes no source). Each probe runs in a fresh bwrap box that mounts the
+ * host read-only, unshares the network, re-binds `root` read-only and binds ONLY `positive` writable; inside,
+ * the probe appends to its fixture and prints the kernel's answer. Recorded per probe: the exit, the bytes
+ * before and after, and that in-box result (null when none came back). `network` is the flag this function
+ * itself passed. A fixture that is not canonical (a symlink, or outside the root) is refused before any box.
  */
-export function observeContainment({ root, scope, probe }) {
-  const binds = scope.flatMap(p => ["--bind", resolvePath(root, p), resolvePath(root, p)]);
-  const probes = probe.map(path => {
-    const abs = resolvePath(root, path);
+export function observeContainment({ root, positive, denial }) {
+  if (typeof root !== "string" || !isAbsolute(root)) throw new Error("observeContainment: root must be absolute");
+  const names = [positive, ...denial];
+  if (!names.every(fixtureName) || new Set(names).size !== names.length) throw new Error("observeContainment: fixtures must be distinct relative names inside the root");
+  for (const n of names) {
+    const abs = resolvePath(root, n);
+    if (existsSync(abs) && realpathSync(abs) !== abs) throw new Error(`observeContainment: ${n} is not canonical (${realpathSync(abs)})`);
+  }
+  const pos = resolvePath(root, positive);
+  const run = (fixture, name) => {
+    const abs = resolvePath(root, name);
     const before = digestOf(abs);
-    let exit;
+    let exit, out;
     try {
-      execFileSync("bwrap", ["--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev",
-        "--ro-bind", root, root, ...binds, "--", "/bin/sh", "-c", 'printf "probe\\n" >> "$1"', "probe", abs],
-        { stdio: ["ignore", "ignore", "ignore"], timeout: 10_000, env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
+      out = execFileSync("bwrap", ["--die-with-parent", "--unshare-net", "--ro-bind", "/", "/", "--dev", "/dev",
+        "--ro-bind", root, root, "--bind", pos, pos, "--", process.execPath, "-e", PROBE_JS, abs],
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, maxBuffer: 4096, env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } });
       exit = 0;
-    } catch (e) { exit = Number.isInteger(e.status) ? e.status : -1; }
-    return { path, exit, before, after: digestOf(abs) };
-  });
-  return { tool: "bwrap", network: "unshared", probes };
+    } catch (e) { exit = Number.isInteger(e.status) ? e.status : -1; out = null; }
+    return { fixture, path: name, exit, before, after: digestOf(abs), inbox: exit === 0 ? parseInbox(out) : null };
+  };
+  return { tool: "bwrap", network: "unshared", probes: [run("positive", positive), ...denial.map(n => run("denial", n))] };
 }
 
 /** The receipt must state exactly the facts the controller observed, and its own containment outcomes. */
@@ -173,20 +215,19 @@ export function checkReceipt(receipt, { ticket, base, candidate, changed, scope,
   if (!c || c.tool !== "bwrap" || c.network !== "unshared" || !Array.isArray(c.probes) || !c.probes.length) {
     return no("RECEIPT_CONTAINMENT", "receipt containment must name tool bwrap, network unshared, and its probes");
   }
-  const inScope = p => scope.includes(p);
   const seen = new Set();
   const outcomes = [];
   for (const p of c.probes) {
     const o = probeOutcome(p);
     if (!o.ok) return o;
-    if (seen.has(p.path)) return no("RECEIPT_CONTAINMENT", `probe path ${p.path} appears twice; an allowed and a refused write must be different paths`);
+    if (seen.has(p.path)) return no("RECEIPT_CONTAINMENT", `probe path ${p.path} appears twice; the positive control and a denial must be different fixtures`);
     seen.add(p.path);
-    if (!inScope(p.path) && o.outcome === "allowed") return no("CONTAINMENT_BREACH", `an out-of-scope write to ${p.path} exited ${p.exit} and changed the file`);
-    if (inScope(p.path) && o.outcome === "refused") return no("RECEIPT_CONTAINMENT", `the in-scope write to ${p.path} was refused (exit ${p.exit}); the box did not grant the scope`);
-    outcomes.push({ path: p.path, outcome: o.outcome });
+    if (p.fixture === "denial" && o.outcome === "allowed") return no("CONTAINMENT_BREACH", `the unbound denial fixture ${p.path} was written by the in-box operation`);
+    if (p.fixture === "positive" && o.outcome === "denied") return no("RECEIPT_CONTAINMENT", `the positive control ${p.path} was denied; the box did not grant the bound write`);
+    outcomes.push({ fixture: p.fixture, outcome: o.outcome });
   }
-  if (!outcomes.some(p => inScope(p.path) && p.outcome === "allowed")) return no("RECEIPT_CONTAINMENT", "no in-scope write was observed allowed");
-  if (!outcomes.some(p => !inScope(p.path) && p.outcome === "refused")) return no("RECEIPT_CONTAINMENT", "no out-of-scope write was observed refused");
+  if (outcomes.filter(p => p.fixture === "positive").length !== 1 || !outcomes.some(p => p.fixture === "positive" && p.outcome === "allowed")) return no("RECEIPT_CONTAINMENT", "exactly one positive control, observed written, is required");
+  if (!outcomes.some(p => p.fixture === "denial" && p.outcome === "denied")) return no("RECEIPT_CONTAINMENT", "no existing denial fixture was observed denied EROFS");
   return { ok: true };
 }
 
