@@ -358,6 +358,8 @@ export async function judgeReviewer({ binding: b, reviewer, outDir, run, readmeR
   };
 }
 
+/** The model a recorded provider response names itself (its raw `model`), or null: the only attestation of who served it. */
+const rawModelOf = e => (typeof e?.response?.model === "string" && e.response.model ? e.response.model : null);
 /** What a routed reviewer's transcript must show beyond the common checks (see the header). Fails closed. */
 const wholeCount = v => Number.isSafeInteger(v) && v >= 0;
 function routedProblems(t, reviewer, b, readmeRow) {
@@ -372,13 +374,37 @@ function routedProblems(t, reviewer, b, readmeRow) {
   for (const s of served) if (s !== null && s !== reviewer.model) why.push(`a response was served by ${s}, not the bound ${reviewer.model}`);
   if (t.identity_mismatch) why.push("the runner refused a response served by another model (identity_mismatch)");
   // The facts behind the summary: every recorded response, an earlier run's included (a continuation carries them).
+  // THE ATTESTATION IS THE RAW PROVIDER RESPONSE'S MODEL (#118). The event's served_model is the producer's derived copy:
+  // it never outranks the raw value, never stands in for a missing one, and contradicting it invalidates the evidence.
   for (const e of Array.isArray(t.events) ? t.events : []) {
-    // A call that recorded a response, or names a served model, is a served response; a failed attempt names neither.
-    const hasResponse = e?.response && typeof e.response === "object";
-    if (e?.type !== "provider_call" || (!hasResponse && (e.served_model === undefined || e.served_model === null))) continue;
-    const s = e.served_model ?? (hasResponse ? e.response.model : null) ?? null;
-    if (s === null) why.push(`missing provenance: the recorded response at turn ${e.turn ?? "?"} named no served model`);
-    else if (s !== reviewer.model) why.push(`the recorded response at turn ${e.turn ?? "?"} was served by ${s}, not the bound ${reviewer.model}`);
+    // Each call is classified by its OWN positive evidence, never by the absence of another kind: a SUCCESS records a
+    // response object; an OBSERVED FAILURE records no response but the producer's explicit failure evidence (an error, or
+    // a non-2xx status) and claims no served model; anything else (a stripped event, a malformed response, a 2xx with
+    // no response) is invalid evidence.
+    if (e?.type !== "provider_call") continue;
+    const hasResponse = e.response !== null && typeof e.response === "object" && !Array.isArray(e.response);
+    const turn = e.turn ?? "?";
+    // A recorded status must be an HTTP status (an integer 100-599); success and failure evidence on one call contradict.
+    const hasStatus = e.http_status !== undefined && e.http_status !== null;
+    const plausible = Number.isInteger(e.http_status) && e.http_status >= 100 && e.http_status <= 599;
+    if (hasStatus && !plausible) { why.push(`turn ${turn}: the recorded status ${e.http_status} is not an HTTP status`); continue; }
+    const failed = (typeof e.error === "string" && e.error.length > 0) || (plausible && (e.http_status < 200 || e.http_status > 299));
+    if (hasResponse && failed) { why.push(`turn ${turn}: the call records both a provider response and a failure (${plausible && (e.http_status < 200 || e.http_status > 299) ? `status ${e.http_status}` : "an error"})`); continue; }
+    const observedFailure = !Object.hasOwn(e, "response") && (e.served_model === undefined || e.served_model === null) && failed;
+    if (observedFailure) continue;
+    if (!hasResponse && (e.served_model === undefined || e.served_model === null)) {
+      why.push(`missing evidence: the provider call at turn ${turn} records neither a response nor an observed failure`);
+      continue;
+    }
+    if (!hasResponse) {
+      why.push(`missing provenance: the call at turn ${turn} claims served model ${e.served_model} with no recorded provider response`);
+      if (e.served_model !== reviewer.model) why.push(`the recorded response at turn ${turn} was served by ${e.served_model}, not the bound ${reviewer.model}`);
+      continue;
+    }
+    const s = rawModelOf(e);
+    if (s === null) why.push(`missing provenance: the recorded response at turn ${turn} named no served model`);
+    else if (s !== reviewer.model) why.push(`the recorded response at turn ${turn} was served by ${s}, not the bound ${reviewer.model}`);
+    if (e.served_model !== undefined && e.served_model !== s) why.push(`turn ${turn}: the event's served_model ${e.served_model} contradicts the provider response's model ${s ?? "(none)"}`);
   }
   // The review copy: the check ran, and is well formed, and found nothing outside .review-tests/.
   const w = t.worktree_check;
@@ -423,7 +449,7 @@ function routedProblems(t, reviewer, b, readmeRow) {
   if (pc > L.max_turns) why.push(`${pc} recorded provider calls exceed the bound max_turns ${L.max_turns}`);
   if (tc > L.max_tool_calls) why.push(`${tc} recorded tool calls exceed the bound max_tool_calls ${L.max_tool_calls}`);
   // Real model evidence: at least one recorded, successful response served by the bound model.
-  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && (e.served_model ?? e.response.model) === reviewer.model))
+  if (!events.some(e => e?.type === "provider_call" && e.response && typeof e.response === "object" && rawModelOf(e) === reviewer.model))
     why.push(`missing evidence: no recorded response was served by the bound ${reviewer.model}`);
   // Coverage: the summary is present and well formed; the facts, re-derived from the events by the producer's own rules
   // against the bound assignment, pass the gate and agree with the summary.
