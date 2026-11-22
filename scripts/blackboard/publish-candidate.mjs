@@ -100,7 +100,9 @@ export function runtimeFiles(argv0) {
   for (const p of [process.execPath, argv0]) {
     if (typeof p !== "string" || !p.startsWith("/") || inSystemView(p)) continue;
     let real; try { real = realpathSync(p); } catch { continue; }
-    if (!statSync(real).isFile() || inSystemView(real)) continue;
+    // The invoked path decides whether a bind is needed; the resolved file is only what is bound there. An alias
+    // outside the view to a file inside it (say <dir>/git -> /usr/bin/git) still needs that one file at that path.
+    if (!statSync(real).isFile()) continue;
     out.set(p, real);
   }
   return [...out].map(([at, from]) => ({ at, from }));

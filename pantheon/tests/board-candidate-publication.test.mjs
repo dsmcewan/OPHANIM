@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, copyFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, copyFileSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -283,3 +283,27 @@ for (const layout of ["ordinary", "standalone"]) {
     } finally { f.cleanup(); }
   });
 }
+
+// ---------------------------------------------------------------- generation 5: an absolute alias to a system file
+test("a gate invoked through an absolute alias outside the view, to a file inside it, runs exactly like the direct path; only that one file appears there", async () => {
+  const f = fixture();
+  try {
+    const marker = join(f.d, "outside-marker.txt"); writeFileSync(marker, "harmless marker\n");
+    mkdirSync(join(f.d, "alias")); const alias = join(f.d, "alias", "git"); symlinkSync("/usr/bin/git", alias);
+    assert.deepEqual(runtimeFiles(alias).filter(x => x.at === alias), [{ at: alias, from: "/usr/bin/git" }], "one file, at the invoked path");
+    const t = stub();
+    for (const exe of ["/usr/bin/git", alias]) {
+      const r = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [{ name: "head", argv: [exe, "rev-parse", "HEAD"] }], transport: t, workRoot: f.d });
+      assert.deepEqual([r.code, r.gates.map(g => [g.name, g.status])], ["PUBLISHED", [["test-lint", 0], ["head", 0]]], `${exe}: ${r.why} :: ${r.gates.map(g => readFileSync(g.stderr_ref, "utf8")).join(" | ").slice(0, 300)}`);
+      assert.equal(readFileSync(r.gates[1].stdout_ref, "utf8").trim(), f.sha);
+      assert.equal(existsSync(r.checkout), false);
+    }
+    // Through an alias (here to /usr/bin/env), the directory around it shows only the bound file, and the marker is hidden.
+    const envAlias = join(f.d, "alias", "env"); symlinkSync("/usr/bin/env", envAlias);
+    const look = { name: "look", argv: [envAlias, "sh", "-c", `ls ${JSON.stringify(join(f.d, "alias"))}; if [ -e ${JSON.stringify(marker)} ]; then echo VISIBLE; else echo HIDDEN; fi`] };
+    const lr = await publishCandidate({ repo: f.repo, sha: f.sha, branch: BRANCH, extra: [look], transport: t, workRoot: f.d });
+    assert.equal(lr.code, "PUBLISHED", `${lr.why} :: ${lr.gates.map(g => readFileSync(g.stderr_ref, "utf8")).join(" | ").slice(0, 300)}`);
+    assert.deepEqual(readFileSync(lr.gates[1].stdout_ref, "utf8").trim().split("\n"), ["env", "HIDDEN"]);
+    assert.equal(t.calls.length, 3);
+  } finally { f.cleanup(); }
+});
