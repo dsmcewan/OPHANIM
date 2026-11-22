@@ -181,6 +181,17 @@ export function chargeOf(run, bound) {
   return { raw, counted: raw, basis: "raw", overrun, why: null };
 }
 // An arm whose accounting cannot be trusted is kept, inconclusive: it decides nothing and cannot qualify a decision.
+// A bounded projection of a run's raw attempts (#131): one {purpose, outcome} per attempt, no prompt, text, usage or
+// environment. It is the evidence the raw count is derived from, so a reader can recount it; past the cap it is
+// marked truncated and cannot qualify anything.
+export const ATTEMPT_PROJECTION_CAP = 512;
+const short = v => (typeof v === "string" ? v.slice(0, 40) : null);
+export function attemptProjection(run) {
+  const list = run?.attempts;
+  if (!Array.isArray(list) || list.some(a => !a || typeof a !== "object" || Array.isArray(a))) return null;
+  return { truncated: list.length > ATTEMPT_PROJECTION_CAP,
+    attempts: list.slice(0, ATTEMPT_PROJECTION_CAP).map(a => ({ purpose: short(a.purpose), outcome: short(a.outcome) })) };
+}
 const undecided = (row, why) => ({ ...row, status: "inconclusive", accepted: null, first_pass: null, why });
 
 export async function compareArms({ tickets, arms, bounds, totalProviderCalls, runner, providers, question = null, plan = null,
@@ -229,7 +240,8 @@ export async function compareArms({ tickets, arms, bounds, totalProviderCalls, r
       const before = spent;
       const c = chargeOf(error ? null : out?.run, B.maxProviderCalls);
       spent += c.counted;
-      const acct = { provider_calls_raw: c.raw, provider_calls_counted: c.counted, provider_calls_basis: c.basis, provider_calls_before: before, provider_calls_overrun: c.overrun };
+      const acct = { provider_calls_raw: c.raw, provider_calls_counted: c.counted, provider_calls_basis: c.basis, provider_calls_before: before, provider_calls_overrun: c.overrun,
+        provider_calls_evidence: error ? null : attemptProjection(out?.run) };
       if (c.overrun) overruns.push({ ticket: spec.key, arm: name, raw: c.raw, bound: B.maxProviderCalls });
       if (error || !out?.run || c.basis === "invalid_raw") {
         row[name] = { ...unobservedRun({ profile: arm.label, why: c.basis === "invalid_raw" ? c.why : error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),

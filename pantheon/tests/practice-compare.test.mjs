@@ -16,7 +16,8 @@ import { writeFileSync, readFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
-import { compareProfiles, dispatchRunner, comparisonEvidence, verifyComparison, COMPARE_SCHEMA } from "../src/practice/compare.mjs";
+import { compareProfiles, compareArms, comparisonDigest, dispatchRunner, comparisonEvidence, verifyComparison, COMPARE_SCHEMA } from "../src/practice/compare.mjs";
+import { currentPolicy, qualifyComparison, COMPARISON } from "../src/ledger/practice-kinds.mjs";
 import { openPantheonLedger } from "../src/ledger/system.mjs";
 import { reviewCycle } from "../src/ledger/review-cycle.mjs";
 import { ledgerView } from "../src/ledger/cycle-kinds.mjs";
@@ -252,8 +253,8 @@ test("practice: a promote resting only on synthetic comparison evidence is refus
   // Only synthetic: refused, directly or through the disposition that cites it.
   assert.throws(() => promote({ evidence: [{ kind: "ledger", hash: measure }, SYNTH] }), /synthetic/);
   assert.throws(() => promote({ evidence: [{ kind: "ledger", hash: measure }] }), /synthetic/, "a disposition resting on a synthetic comparison is synthetic evidence");
-  const promoted = promote({ evidence: [{ kind: "ledger", hash: measure }, SYNTH, LIVE] });
-  assert.equal(ledgerView(sys.ledger).payload(promoted).outcome, "promote");
+  // #131: a DECLARED live digest is a claim, not proof -- with no retained record it carries nothing.
+  assert.throws(() => promote({ evidence: [{ kind: "ledger", hash: measure }, SYNTH, LIVE] }), /retained record/);
   assert.equal(sys.ledger.verify().ok, true, "and the chain re-derives with the rule applied");
 }));
 // The older promote (citing a non-comparison ledger entry, no synthetic flag anywhere) still verifies:
@@ -313,3 +314,59 @@ test("pantheon-compare.mjs: --clients/--turn fake modules, an explicit --max-pro
     assert.deepEqual(summary.evidence, comparisonEvidence(rec));
   });
 });
+
+// ---------------------------------------------------------------- #131: a promote binds to a retained, qualifying comparison
+const attemptOf = purpose => ({ purpose, vendor: "xai", model: "m", pool: "xai", outcome: "ok", usage: { input_tokens: 10, output_tokens: 2 } });
+const scriptedRun = n => ({ shipped: true, gates: [{ gate: "REVIEW", ok: true }, { gate: "TESTS", ok: true }], revisions: [{ rev: 1 }],
+  started_at: "2026-11-22T00:00:00.000Z", finished_at: "2026-11-22T00:00:01.000Z", turns: [],
+  attempts: Array.from({ length: n }, (_, i) => attemptOf(`t${i}`)), resources: { usd: null, usd_basis: "unknown" } });
+// argo is the policy in effect (the cycle's); fit is the candidate. "live" is DECLARED by this scripted fixture: it
+// proves the interface only, never a measurement.
+const ROSTER_ARMS = [{ label: "argo", profile: "argo" }, { label: "fit", profile: "fit" }];
+const FIT = { id: "fit-roster", policy: currentPolicy("fit"), change: "route by fit" };
+const armsRecord = ({ calls, bound = 2, total = 8, n = 2, providers = { kind: "live", vendors: ["xai"] } }) =>
+  compareArms({ tickets: Array.from({ length: n }, (_, i) => ({ key: `r${i}`, goal: "g" })), arms: ROSTER_ARMS, bounds: { maxProviderCalls: bound, revisions: 1 },
+    totalProviderCalls: total, providers, runner: async ({ spec, arm }) => ({ result: { shipped: true }, run: scriptedRun(calls({ ticket: spec.key, arm })) }) });
+const rehash = r => ({ ...r, digest: comparisonDigest(r) });
+
+test("roster promotion: a promote binds to a retained, finalized, live, budget-valid comparison of exactly its policies; everything else is refused", () => practiceLedger(async (sys, rec) => {
+  const good = await armsRecord({ calls: () => 1 });
+  assert.deepEqual([qualifyComparison(good).ok, good.budget.valid, good.spent_provider_calls, good.paired.pairs], [true, true, 4, 2]);
+  assert.deepEqual(good.results[0].baseline.provider_calls_evidence, { truncated: false, attempts: [{ purpose: "t0", outcome: "ok" }] }, "a bounded projection: purpose and outcome only");
+  // The real comparator's overrun: raw 3 against bound 2 -> budget invalid, nothing more admitted.
+  const overrun = await armsRecord({ calls: ({ ticket, arm }) => (ticket === "r0" && arm === "baseline" ? 3 : 1), total: 20 });
+  assert.deepEqual([overrun.budget.valid, overrun.spent_provider_calls], [false, 3]);
+  // The decisive frozen check: keep the recorded attempts, edit every derived field to look under the cap, rehash.
+  const b0 = overrun.results[0].baseline;
+  const forged = rehash({ ...structuredClone(overrun), digest: undefined, budget: { valid: true, overruns: [] }, spent_provider_calls: 2,
+    results: overrun.results.map((row, i) => i ? row : { ...row, baseline: { ...b0, provider_calls_raw: 2, provider_calls_counted: 2, provider_calls_overrun: false } }) });
+  assert.equal(verifyComparison(forged).ok, true, "its digest re-derives: integrity alone cannot catch it");
+  assert.match(qualifyComparison(forged).why, /made 3 recorded attempts against a per-run bound of 2/);
+  const synthetic = await armsRecord({ calls: () => 1, providers: { kind: "fake" } });
+
+  const first = await cycleOf(rec);
+  const proposal = rec.recordDisposition({ cycle: first, outcome: "propose_policy", question: QUESTION, evidence: [SYNTH], provenance: by,
+    candidate: FIT, proposer: { vendor: "openai", model: "gpt-6-sol", lab: "openai" } });
+  const wrongProposal = rec.recordDisposition({ cycle: first, outcome: "propose_policy", question: QUESTION, evidence: [SYNTH], provenance: by,
+    candidate: CANDIDATE, proposer: { vendor: "openai", model: "gpt-6-sol", lab: "openai" } });
+  rec.closeCycle(first);
+  const second = await cycleOf(rec, C("d"));
+  const keep = r => rec.recordComparison(r);
+  const [hGood, hOver, hForged, hSynth] = [good, overrun, forged, synthetic].map(keep);
+  assert.equal(ledgerView(sys.ledger).entry(hOver).kind, COMPARISON, "a budget-invalid record is still retained: a preserved receipt");
+  const promote = (evidence, prop = proposal) => rec.recordDisposition({ cycle: second, stage: "candidate", proposal: prop, outcome: "promote", question: QUESTION, measured: true,
+    conditions: CONDITIONS, by: { vendor: "xai", model: "grok-4.7", lab: "xai" }, provenance: { by: { role: "check@review" }, method: "review of the comparison" }, evidence });
+  const cite = (h, r) => [{ kind: "ledger", hash: h }, comparisonEvidence(r)];
+  assert.throws(() => promote([LIVE]), /retained comparison/, "missing: no retained record at all");
+  assert.throws(() => promote(cite(hOver, overrun)), /budget-invalid/, "budget-invalid");
+  assert.throws(() => promote(cite(hForged, forged)), /made 3 recorded attempts/, "a rehashed contradiction of the raw calls");
+  assert.throws(() => promote(cite(hSynth, synthetic)), /synthetic/, "synthetic-only");
+  assert.throws(() => promote([{ kind: "ledger", hash: hGood }, { ...comparisonEvidence(good), sha: overrun.digest }]), /retained record/, "a digest that is not the retained record's");
+  assert.throws(() => promote([{ kind: "ledger", hash: hGood }]), /does not rest on/, "a retained record cited without its digest");
+  assert.throws(() => promote(cite(hGood, good), wrongProposal), /compared other policies/, "the wrong candidate association");
+  assert.throws(() => rec.recordComparison({ ...good, spent_provider_calls: 0 }), /digest re-derives/, "an unreadable/edited record is not retained at all");
+  // The genuine control: retained, live (declared by the fixture), budget-valid, raw-consistent, of exactly these policies.
+  const promoted = promote(cite(hGood, good));
+  assert.equal(ledgerView(sys.ledger).payload(promoted).outcome, "promote");
+  assert.equal(sys.ledger.verify().ok, true, "the chain re-derives with the rule applied");
+}));
