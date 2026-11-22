@@ -66,9 +66,9 @@ export function routesOf(config) {
 }
 const endpointOf = (config, target) => `repos/${config.repo}/issues/${target.slice(target.indexOf(':') + 1)}/comments`;
 
-const MAX_SENDS = 20, MAX_SCAN = 1000;
+const MAX_SENDS = 20;
 export async function githubTick(store, config, api = githubAPI, cloud = sendCloud) {
-  const { allowed, routeOf } = routesOf(config);
+  const { allowed, fallback, routeOf } = routesOf(config);
   // Each allowlisted target's own timeline, read and imported as that target; nothing else is read. A target whose
   // read fails is set aside for this tick (its replies are not imported, its sends wait, its uncertain sends stay
   // uncertain); the other targets go on, and the tick reports every failure at its end.
@@ -104,29 +104,16 @@ export async function githubTick(store, config, api = githubAPI, cloud = sendClo
     if (found) store.finishDelivery(pending.id, 'delivered', { url: found.html_url, comment_id: found.id, reconciled: true });
   }
   const route = config.outboundTransport ?? 'github';
-  // BOUNDED, OLDEST-FIRST DISPATCH that looks past messages which must wait (a set-aside target): pages of the queue,
-  // at most MAX_SENDS sends and MAX_SCAN messages looked at per tick.
-  let sends = 0, scanned = 0, after = null;
-  const pending = [];
-  page: while (sends < MAX_SENDS && scanned < MAX_SCAN) {
-    const batch = store.outbox(route, { after, limit: 50 });
-    for (const msg of batch) {
-      after = { created_at: msg.created_at, seq: msg.seq };
-      if (++scanned > MAX_SCAN) break page;
-      pending.push(msg);
-      if (failed.has(routeOf(msg)) || !routeOf(msg) || !allowed.has(routeOf(msg))) continue;
-      if (++sends >= MAX_SENDS) break page;
-    }
-    if (batch.length < 50) break;
+  // SELECTION FILTERS, THEN TAKES. Refusals: at most MAX_SENDS unroutable messages per tick, from their own query.
+  // Sends: the oldest MAX_SENDS messages routed to a target that was read this tick, chosen in the query, so no
+  // backlog for a failed or unconfigured target, however long, delays them.
+  for (const msg of store.unroutedOutbox(route, { allowed, fallback, limit: MAX_SENDS })) {
+    store.refuseDelivery(msg.id, { reason: 'NO_ROUTE', target: msg.target ?? null, allowed: [...allowed].sort() });
   }
-  for (const msg of pending) {
+  const sendable = [...allowed].filter(t => !failed.has(t));
+  for (const msg of sendable.length ? store.routedOutbox(route, { targets: sendable, fallback, limit: MAX_SENDS }) : []) {
     const target = routeOf(msg);
-    // NO ROUTE: a target the config does not allow (or no target and no legacy PR) is refused, never sent or retried.
-    if (!target || !allowed.has(target)) {
-      store.refuseDelivery(msg.id, { reason: 'NO_ROUTE', target: msg.target ?? null, allowed: [...allowed].sort() });
-      continue;
-    }
-    // A target that could not be read this tick is not written to: the message stays queued for the next tick.
+    // A target whose send failed earlier in this tick gets no further write this tick.
     if (failed.has(target)) continue;
     store.beginDelivery(msg.id, route);
     const body = githubBody(msg, { repo: config.repo, target: msg.target ? target : null });

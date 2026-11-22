@@ -85,6 +85,10 @@ export function formatReply({ banner, text, acks = [], kind = 'REPLY', target })
   return `${banner}\n\n${body}\n\n<!-- ophanim-collab-reply ${JSON.stringify({ schema: REPLY_SCHEMA, kind, ack: acks, ...(target ? { target } : {}) })} -->\n`;
 }
 
+// Is a message routed to one of a list of targets (a JSON array; a message without a target has the route `fallback`)?
+// Two-valued: a missing target or fallback is false, never NULL, so NOT of it is the exact complement.
+const ROUTED = `(COALESCE(json_extract(payload,'$.target') IN (SELECT value FROM json_each(?)), 0)
+      OR (json_extract(payload,'$.target') IS NULL AND COALESCE(? IN (SELECT value FROM json_each(?)), 0)))`;
 export class Store {
   constructor(path = process.env.OPHANIM_COLLAB_DB ?? DEFAULT_DB, now = Date.now) {
     this.now = now;
@@ -186,18 +190,23 @@ export class Store {
     if (!to) throw new Error('Unknown delivery route');
     return to;
   }
+  /** The 20 oldest queued messages a route delivers, in insertion order (created_at, then rowid: a random id is no order). */
+  outbox(route) {
+    return this.db.prepare("SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,rowid LIMIT 20").all(this.recipientOf(route)).map(r => this.decode(r));
+  }
   /**
-   * The queued messages a route delivers, oldest first in insertion order (created_at, then rowid: a random id is no
-   * order). Default: the first 20, as every caller has read them. With `after` (the cursor of the last message seen,
-   * {created_at, seq}) the next page, so a caller can look past messages it must leave waiting.
+   * ROUTED SELECTION (issue #98): FILTER, THEN TAKE. The oldest `limit` queued messages of a route whose target is in
+   * `targets` (a message without a target has the route `fallback`). Eligibility is decided in the query, so no number
+   * of older messages for other targets is examined on the way, or can delay these.
    */
-  outbox(route, { after = null, limit = 20 } = {}) {
-    const to = this.recipientOf(route);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('Outbox page size must be 1..100');
-    const page = after
-      ? this.db.prepare("SELECT rowid AS seq, * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' AND (created_at>? OR (created_at=? AND rowid>?)) ORDER BY created_at,rowid LIMIT ?").all(to, after.created_at, after.created_at, after.seq, limit)
-      : this.db.prepare("SELECT rowid AS seq, * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued' ORDER BY created_at,rowid LIMIT ?").all(to, limit);
-    return page.map(r => this.decode(r));
+  routedOutbox(route, { targets, fallback = null, limit = 20 }) {
+    return this.db.prepare(`SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued'
+      AND ${ROUTED} ORDER BY created_at,rowid LIMIT ?`).all(this.recipientOf(route), JSON.stringify([...targets]), fallback, JSON.stringify([...targets]), limit).map(r => this.decode(r));
+  }
+  /** The oldest `limit` queued messages of a route that NO allowed target carries (to refuse, a bounded number at a time). */
+  unroutedOutbox(route, { allowed, fallback = null, limit = 20 }) {
+    return this.db.prepare(`SELECT * FROM messages WHERE to_agent=? AND acknowledged_at IS NULL AND delivery_state='queued'
+      AND NOT ${ROUTED} ORDER BY created_at,rowid LIMIT ?`).all(this.recipientOf(route), JSON.stringify([...allowed]), fallback, JSON.stringify([...allowed]), limit).map(r => this.decode(r));
   }
   beginDelivery(id, route) {
     return this.transaction(() => {

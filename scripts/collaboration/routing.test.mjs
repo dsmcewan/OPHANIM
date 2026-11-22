@@ -247,3 +247,31 @@ test('routing: dispatch is bounded per tick and oldest-first per route; unconfig
   assert.throws(() => store.beginDelivery(codexBound[21], 'desktop'), /already claimed/);
   assert.throws(() => store.beginDelivery(codexBound[0], 'github'), /already claimed or unavailable/, 'a route never claims another recipient\'s message');
 });
+
+test('routing: selection filters before it limits -- 999, 1,000 or 1,001 older messages for an unreadable target do not delay a healthy one past the first tick', async t => {
+  for (const blocked of [999, 1000, 1001]) {
+    const { store } = fixture(t), gh = github();
+    for (let i = 0; i < blocked; i++) store.send({ from: 'codex', to: 'claude', key: `old-${i}`, text: 'x', target: 'pr:104' });
+    const b = store.send({ from: 'codex', to: 'claude', key: 'b', text: 'For issue 98.', target: 'issue:98' });
+    gh.down.read.add(104);
+    await assert.rejects(bridge.githubTick(store, route, gh.api), /pr:104/);
+    assert.equal(store.get(b.id).delivery_state, 'delivered', `${blocked} blocked: delivered in the first tick`);
+    assert.deepEqual(gh.posts.map(p => p.n), [98], `${blocked} blocked: once, and nothing written to the unreadable target`);
+  }
+});
+
+test('routing: an unconfigured-route backlog is refused at most 20 per tick and never crowds out a healthy message; eligible sends stay bounded and oldest first', async t => {
+  const { store } = fixture(t), gh = github();
+  const strays = [];
+  for (let i = 0; i < 1001; i++) strays.push(store.send({ from: 'codex', to: 'claude', key: `stray-${i}`, text: 'x', target: 'pr:555' }).id);
+  const healthy = [];
+  for (let i = 0; i < 25; i++) healthy.push(store.send({ from: 'codex', to: 'claude', key: `h-${i}`, text: `Healthy ${i}.`, target: 'issue:98' }).id);
+  await bridge.githubTick(store, route, gh.api);
+  const refused = () => strays.filter(id => store.get(id).delivery_state === 'refused').length;
+  assert.equal(refused(), 20, 'refusals are bounded per tick');
+  assert.deepEqual(gh.posts.map(p => healthy.findIndex(id => p.body.includes(bridge.marker(id)))), [...Array(20).keys()], 'the 20 oldest healthy messages are sent in the first tick, oldest first');
+  await bridge.githubTick(store, route, gh.api);
+  assert.equal(refused(), 40);
+  assert.equal(gh.posts.length, 25, 'the rest in the next tick, none twice');
+  assert.equal(store.outbox('github').length, 20, 'the default outbox (desktop and CLI contract) is unchanged');
+});
