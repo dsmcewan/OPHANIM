@@ -10,14 +10,17 @@
 // Each record names the plan's commit and goes into the lane's records directory, so the next round's Detect reads
 // it. The checkout is fresh at that commit and checked clean BEFORE anything runs, so the commit a record names is the
 // code the run tested by construction; files a test leaves behind are outputs, not changes to that code.
-// It runs the outer wheels and edits none of them. At the end it writes inspection/last.json (which steps ran, their
-// exits and records) and removes inspection/running.json, so the lane can start the next inspection when the line moves.
+// It runs the outer wheels and edits none of them. What a step produced is recorded as before; whether it is a finished
+// report of its kind (reportRefusal) decides only whether the attempt was complete. Nothing is invented. At the end it writes inspection/last.json
+// (the attempt: which steps ran, their exits and records, and whether it was COMPLETE by that evidence --
+// inspectionCompleteness), copies it to complete.json when it was, and removes inspection/running.json. An incomplete
+// attempt is retried by the lane when due; the stress run's comparison base stays the last complete commit.
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {checkoutAt, spawnRun, writeRecord, writeJsonAtomic, inspectionDirOf, INSPECTION_SCHEMA} from './self-repair.mjs';
+import {checkoutAt, spawnRun, writeRecord, writeJsonAtomic, inspectionDirOf, inspectionCompleteness, reportRefusal, INSPECTION_SCHEMA} from './self-repair.mjs';
 
 const WITHHELD = /(^|\/)findings-[^/]*(\/|$)/;
 const NICE = ['/usr/bin/nice', '/bin/nice'].find(p => fs.existsSync(p)) ?? null;
@@ -35,15 +38,23 @@ export const fill = (tpl, vars) => tpl.flatMap(a => (a === '{files}' ? vars.file
 
 export async function runInspection(plan, {log = s => console.log(s)} = {}) {
   const started_at = new Date().toISOString(), steps = [], insp = plan.inspect;
+  const attempt = Number.isInteger(plan.attempt) && plan.attempt > 0 ? plan.attempt : 1;
   const dir = inspectionDirOf(plan.state);
-  writeJsonAtomic(path.join(dir, 'running.json'), {schema: INSPECTION_SCHEMA, commit: plan.commit, pid: process.pid, started_at, since: plan.since});
+  writeJsonAtomic(path.join(dir, 'running.json'), {schema: INSPECTION_SCHEMA, commit: plan.commit, pid: process.pid, started_at, since: plan.since, attempt});
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'self-repair-inspect-'));
   let co = null;
   const run = args => { const cmd = NICE && Number.isInteger(insp.nice) ? [NICE, '-n', String(insp.nice), ...args] : args; return spawnRun(cmd[0], cmd.slice(1), {cwd: co.dir, env: process.env, timeout: insp.timeout_ms ?? 90 * 60_000}); };
   const record = (name, kind, body, r) => {
     const file = writeRecord({dir: plan.records, kind, commit: plan.commit, record: body});
     steps.push({name, exit: r.exit, ms: r.ms, killed: r.killed ?? null, record: path.relative(plan.records, file)});
-    log(`inspect: ${name} exit ${r.exit} -> ${kind} record`);
+    const bad = reportRefusal(kind, body, kind === 'pentest' ? r.exit : null);
+    log(`inspect: ${name} exit ${r.exit} -> ${kind} record${bad ? ` (not complete: ${bad})` : ''}`);
+  };
+  const report = (name, kind, file, r, what) => {
+    if (!fs.existsSync(file)) { steps.push({name, exit: r.exit, ms: r.ms, killed: r.killed ?? null, error: `no ${what} record was written: ${cut(r.stderr || r.stdout, 300)}`}); return; }
+    let body;
+    try { body = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { steps.push({name, exit: r.exit, ms: r.ms, killed: r.killed ?? null, error: `the ${what} record is not JSON: ${cut(e.message, 200)}`}); return; }
+    record(name, kind, body, r);
   };
   try {
     co = checkoutAt(plan.repo, plan.commit);
@@ -52,15 +63,13 @@ export async function runInspection(plan, {log = s => console.log(s)} = {}) {
     // 1. The whole gate run.
     const gj = path.join(tmp, 'gate.json');
     const g = await run(fill(insp.gates, {json: gj}));
-    if (fs.existsSync(gj)) record('gates', 'gate', JSON.parse(fs.readFileSync(gj, 'utf8')), g);
-    else steps.push({name: 'gates', exit: g.exit, ms: g.ms, killed: g.killed ?? null, error: `no gate record was written: ${cut(g.stderr || g.stdout, 300)}`});
+    report('gates', 'gate', gj, g, 'gate');
     // 2. Stress: the test files changed since the last inspected commit.
     const files = plan.since ? changedTests(co.dir, plan.since, plan.commit) : [];
     if (files.length) {
       const sj = path.join(tmp, 'stress.json');
       const s = await run(fill(insp.stress, {files, rounds: insp.rounds ?? 5, json: sj}));
-      if (fs.existsSync(sj)) record('stress', 'stress', JSON.parse(fs.readFileSync(sj, 'utf8')), s);
-      else steps.push({name: 'stress', exit: s.exit, ms: s.ms, killed: s.killed ?? null, error: `no stress record was written: ${cut(s.stderr || s.stdout, 300)}`});
+      report('stress', 'stress', sj, s, 'stress');
     } else steps.push({name: 'stress', skipped: plan.since ? `no test file changed since ${plan.since.slice(0, 12)}` : 'the first inspection: no earlier inspected commit to compare with'});
     // 3. The pentest: its report is the record (as `self-repair record --kind pentest` takes it).
     const p = await run(fill(insp.pentest, {}));
@@ -71,7 +80,12 @@ export async function runInspection(plan, {log = s => console.log(s)} = {}) {
   } finally {
     try { co?.done(); } catch {}
     fs.rmSync(tmp, {recursive: true, force: true});
-    writeJsonAtomic(path.join(dir, 'last.json'), {schema: INSPECTION_SCHEMA, commit: plan.commit, since: plan.since, started_at, finished_at: new Date().toISOString(), steps});
+    const body = {schema: INSPECTION_SCHEMA, commit: plan.commit, since: plan.since, attempt, started_at, finished_at: new Date().toISOString(), steps};
+    const c = inspectionCompleteness(body, plan.records);
+    body.complete = c.complete; body.incomplete = c.why;
+    writeJsonAtomic(path.join(dir, 'last.json'), body);
+    if (c.complete) writeJsonAtomic(path.join(dir, 'complete.json'), body);
+    log(`inspect: attempt ${attempt} of ${String(plan.commit).slice(0, 12)} ${c.complete ? 'COMPLETE' : `INCOMPLETE (${c.why.join('; ')})`}`);
     fs.rmSync(path.join(dir, 'running.json'), {force: true});
   }
   return steps;

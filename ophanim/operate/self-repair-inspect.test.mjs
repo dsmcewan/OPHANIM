@@ -8,7 +8,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import {tick} from './scheduler.mjs';
-import {readRecords, detect, inspectionState, inspectionDirOf, INSPECTION_SCHEMA, DEFAULT_CONFIG} from './self-repair.mjs';
+import {spawnSync} from 'node:child_process';
+import * as lane from './self-repair.mjs';
+import {readRecords, detect, inspectionState, inspectionDirOf, inspectIdle, writeRecord, INSPECTION_SCHEMA, DEFAULT_CONFIG} from './self-repair.mjs';
 import {runInspection, changedTests, fill} from './self-repair-inspect.mjs';
 import {laneRepo, gateRecord, scriptedRound, addsPlan, LIMITS, REG, g} from './fixtures/self-repair-fixture.mjs';
 
@@ -20,6 +22,22 @@ const commitFiles = (repo, files, message) => {
   return g(repo, 'rev-parse', 'HEAD');
 };
 const GATE_TOOL = {'scripts/test-gates/check.mjs': '// the gate tool (a fixture stand-in)\n'};
+// Finished reports of each kind (synthetic), and a COMPLETE attempt of `commit` with its records, as the inspector leaves it.
+const GATE_PASS = {schema: 'ophanim.test-gate/v2', verdict: 'PASS', results: [{suite: 'test', verdict: 'PASS', problems: [], notes: []}]};
+const PENTEST_OK = '--- summary ---\nattacks recorded: 0  (REFUSED 0; registered holes 0; new holes 0; known-holes-now-fixed 0)\n\nOK: every attack was refused or confirmed a registered known hole; no new hole, nothing regressed.\n';
+const completeAttempt = (f, commit, {at = '2026-11-20T00:00:00.000Z'} = {}) => {
+  const rel = file => path.relative(f.records, file);
+  const steps = [{name: 'gates', exit: 0, ms: 1, killed: null, record: rel(writeRecord({dir: f.records, kind: 'gate', commit, record: GATE_PASS, at}))},
+    {name: 'stress', skipped: 'the first inspection: no earlier inspected commit to compare with'},
+    {name: 'pentest', exit: 0, ms: 1, killed: null, record: rel(writeRecord({dir: f.records, kind: 'pentest', commit, record: {report: PENTEST_OK}, at}))}];
+  return {schema: INSPECTION_SCHEMA, commit, since: null, attempt: 1, started_at: at, finished_at: at, steps};
+};
+const writeInspection = (f, name, body) => { fs.mkdirSync(inspectionDirOf(f.stateDir), {recursive: true}); fs.writeFileSync(path.join(inspectionDirOf(f.stateDir), name), JSON.stringify(body)); };
+const writer = body => ['node', '-e', `require('fs').writeFileSync(process.argv[process.argv.length - 1], ${JSON.stringify(JSON.stringify(body))})`];
+const PENTEST_STUB = ['node', '-e', `process.stdout.write(${JSON.stringify(PENTEST_OK)})`];
+const idle = (f, starts, over = {}) => inspectIdle({repo: f.repo, state: f.stateDir, head: over.head ?? f.head, records: f.records, start: plan => { starts.push(plan); return over.pid ?? 2 ** 22 + 7; },
+  at: () => over.at ?? new Date().toISOString(), ...(over.config ? {config: over.config} : {})});
+const deadPid = () => spawnSync(process.execPath, ['-e', '0']).pid;
 /** An idle lane: nothing in the register, no gate record, a commit that carries the gate tool. */
 const idleRepo = t => { const f = laneRepo(t, {register: []}); return {...f, head: commitFiles(f.repo, GATE_TOOL, 'the gate tool')}; };
 const tickWith = (f, starts, extra = {}) => tick({repo: f.repo, statusRoot: f.statusRoot, workRoot: f.workRoot, limits: LIMITS,
@@ -47,8 +65,7 @@ test('loop: one inspection at a time -- while one runs, the next tick does not s
 
 test('loop: a commit is inspected once; when the line moves, the next inspection starts, comparing with the last', async t => {
   const f = idleRepo(t), starts = [];
-  fs.mkdirSync(inspectionDirOf(f.stateDir), {recursive: true});
-  fs.writeFileSync(path.join(inspectionDirOf(f.stateDir), 'last.json'), JSON.stringify({schema: INSPECTION_SCHEMA, commit: f.head, finished_at: '2026-11-20T00:00:00Z', steps: []}));
+  writeInspection(f, 'last.json', completeAttempt(f, f.head));
   const same = await tickWith(f, starts);
   assert.equal(same.self_repair.inspection.state, 'already-inspected');
   assert.equal(starts.length, 0);
@@ -83,7 +100,6 @@ test('inspector: the gate run, the stress run of the changed tests and the pente
   const head = commitFiles(f.repo, {...GATE_TOOL, 'test/calc.test.mjs': fs.readFileSync(path.join(f.repo, 'test/calc.test.mjs'), 'utf8') + '// changed\n'}, 'a changed test');
   const gate = {schema: 'ophanim.test-gate/v2', verdict: 'FAIL', results: [{suite: 'test', verdict: 'FAIL', problems: [], notes: ['fail: adds at test/calc.test.mjs:4 -- testCodeFailure: x']}]};
   const stress = {schema: 'ophanim.toolkit.stress/v1', verdict: 'FAIL', repeat: 2, files: ['test/calc.test.mjs'], byTest: [{file: 'test/calc.test.mjs', name: 'multiplies', rounds: [2], pattern: 'intermittent'}]};
-  const writer = body => ['node', '-e', `require('fs').writeFileSync(process.argv[process.argv.length - 1], ${JSON.stringify(JSON.stringify(body))})`];
   const inspect = {gates: [...writer(gate), '{json}'], stress: [...writer(stress), '{files}', '{json}'], pentest: ['node', '-e', 'console.log("=== PENTEST (stub) ===")'], rounds: 2, nice: null, timeout_ms: 60_000};
   const steps = await runInspection({schema: INSPECTION_SCHEMA, repo: f.repo, commit: head, since, records: f.records, state: f.stateDir, inspect}, {log: () => {}});
   assert.deepEqual(steps.map(s => [s.name, s.exit, Boolean(s.record)]), [['gates', 0, true], ['stress', 0, true], ['pentest', 0, true]], JSON.stringify(steps));
@@ -107,4 +123,92 @@ test('inspector: the first inspection (no earlier commit) skips the stress run; 
   assert.ok(steps.find(s => s.name === 'pentest').record);
   assert.deepEqual(changedTests(f.repo, f.base, head), [], 'only test files are listed');
   assert.deepEqual(fill(['x', '{files}', '--repeat', '{rounds}', '{json}', '{other}'], {files: ['a.test.mjs', 'b.test.mjs'], rounds: 3, json: '/j'}), ['x', 'a.test.mjs', 'b.test.mjs', '--repeat', '3', '/j', '{other}']);
+});
+
+// ---- ACQUISITION AND RETRY: an inspection is complete by its evidence, never by having run ----------------------------
+test('acquisition: an attempt whose gate tool wrote no report is INCOMPLETE; the lane does not take the head as inspected: it waits, then retries it when due, as attempt 2', async t => {
+  const f = idleRepo(t), starts = [];
+  const inspect = {...DEFAULT_CONFIG.inspect, gates: ['node', '-e', 'process.exit(1)', '{json}'], stress: ['node', '-e', 'process.exit(9)'], pentest: PENTEST_STUB, nice: null, timeout_ms: 60_000};
+  await runInspection({schema: INSPECTION_SCHEMA, repo: f.repo, commit: f.head, since: null, attempt: 1, records: f.records, state: f.stateDir, inspect}, {log: () => {}});
+  const {last, complete, running} = inspectionState(f.stateDir);
+  assert.deepEqual([last.commit, last.attempt, last.complete, complete, running], [f.head, 1, false, null, null]);
+  assert.match(last.incomplete.join(' '), /gates: no gate record was written/);
+  const ended = Date.parse(last.finished_at);
+  const soon = idle(f, starts, {at: new Date(ended + 60_000).toISOString()});
+  assert.deepEqual([soon.state, soon.attempt, starts.length], ['retry-wait', 1, 0], JSON.stringify(soon));
+  assert.equal(soon.next_at, new Date(ended + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString());
+  const due = idle(f, starts, {at: new Date(ended + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString()});
+  assert.deepEqual([due.state, due.commit, due.attempt, starts.length, starts[0]?.attempt], ['retrying', f.head, 2, 1, 2], JSON.stringify(due));
+  assert.match(due.incomplete.join(' '), /no gate record/);
+  assert.equal(inspectionState(f.stateDir).running.attempt, 2, 'the attempt is recorded with the running inspection');
+});
+
+test('acquisition: a step killed at its bound is INCOMPLETE even though its tool started; the retry delay doubles per attempt and is capped', async t => {
+  const f = idleRepo(t);
+  // The gate tool writes a finished report and then hangs past the bound: only the process evidence makes it incomplete.
+  const inspect = {...DEFAULT_CONFIG.inspect, gates: ['node', '-e', `require('fs').writeFileSync(process.argv.at(-1), ${JSON.stringify(JSON.stringify(GATE_PASS))}); setTimeout(() => {}, 60000)`, '{json}'], pentest: PENTEST_STUB, nice: null, timeout_ms: 1500};
+  await runInspection({schema: INSPECTION_SCHEMA, repo: f.repo, commit: f.head, since: null, records: f.records, state: f.stateDir, inspect}, {log: () => {}});
+  const {last} = inspectionState(f.stateDir);
+  assert.equal(last.complete, false);
+  assert.equal(last.steps.find(s => s.name === 'gates').killed, 'timeout');
+  assert.ok(last.steps.find(s => s.name === 'gates').record, 'the report it wrote is kept');
+  assert.match(last.incomplete.join(' '), /gates: the run did not finish on its own .*killed: timeout/);
+  const r = {first_ms: 1000, max_ms: 5000};
+  assert.deepEqual([1, 2, 3, 4, 9].map(n => lane.inspectionRetryMs(n, r)), [1000, 2000, 4000, 5000, 5000]);
+});
+
+test('acquisition: a gate run whose tests FAIL is COMPLETE -- its findings are kept for Detect and the head is not inspected again', async t => {
+  const f = idleRepo(t), starts = [];
+  const gate = {schema: 'ophanim.test-gate/v2', verdict: 'FAIL', results: [{suite: 'test', verdict: 'FAIL', problems: [], notes: ['fail: adds at test/calc.test.mjs:4 -- testCodeFailure: x']}]};
+  const inspect = {...DEFAULT_CONFIG.inspect, gates: ['node', '-e', `require('fs').writeFileSync(process.argv.at(-1), ${JSON.stringify(JSON.stringify(gate))}); process.exit(1)`, '{json}'], pentest: PENTEST_STUB, nice: null, timeout_ms: 60_000};
+  const steps = await runInspection({schema: INSPECTION_SCHEMA, repo: f.repo, commit: f.head, since: null, records: f.records, state: f.stateDir, inspect}, {log: () => {}});
+  assert.deepEqual(steps.find(s => s.name === 'gates').exit, 1, 'the gate tool exits non-zero for failing tests');
+  const {last, complete} = inspectionState(f.stateDir);
+  assert.deepEqual([last.complete, last.incomplete, complete?.commit], [true, [], f.head]);
+  assert.deepEqual(detect({repo: f.repo, commit: f.head, records: readRecords(f.records)}).defects.map(d => d.kind), ['regression']);
+  const again = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  assert.deepEqual([again.state, starts.length], ['already-inspected', 0]);
+});
+
+test('acquisition: the stress comparison base stays the last COMPLETE head when a later head was inspected incompletely', async t => {
+  const f = idleRepo(t), starts = [];
+  const a = f.head;
+  writeInspection(f, 'complete.json', completeAttempt(f, a));
+  const b = commitFiles(f.repo, {'lib/b.mjs': 'export const b = 1;\n'}, 'b');
+  writeInspection(f, 'last.json', {schema: INSPECTION_SCHEMA, commit: b, since: a, attempt: 1, started_at: '2026-11-20T01:00:00.000Z', finished_at: '2026-11-20T01:00:00.000Z',
+    steps: [{name: 'inspection', error: 'the checkout failed'}], complete: false});
+  const c = commitFiles(f.repo, {'lib/c.mjs': 'export const c = 1;\n'}, 'c');
+  const r = idle(f, starts, {head: c});
+  assert.deepEqual([r.state, r.commit, r.since, r.attempt], ['started', c, a, 1], JSON.stringify(r));
+});
+
+test('recovery: an inspector that died without its result is recorded as an interrupted attempt and retried when due; a live inspector is never started beside', async t => {
+  const f = idleRepo(t), starts = [];
+  const pid = deadPid(), started_at = '2026-11-21T00:00:00.000Z', now = '2026-11-21T02:00:00.000Z';
+  writeInspection(f, 'running.json', {schema: INSPECTION_SCHEMA, commit: f.head, pid, started_at, since: null, attempt: 1});
+  const r = idle(f, starts, {at: now});
+  assert.deepEqual([r.state, r.recovered?.result, r.recovered?.pid, starts.length], ['retry-wait', 'interrupted', pid, 0], JSON.stringify(r));
+  const {running, last} = inspectionState(f.stateDir);
+  assert.equal(running, null, 'the dead inspector\'s running.json is removed');
+  assert.deepEqual([last.commit, last.attempt, last.complete, last.recovered_at], [f.head, 1, false, now]);
+  assert.match(last.steps[0].error, new RegExp(`interrupted: the inspector \\(pid ${pid}\\)`));
+  const later = idle(f, starts, {at: new Date(Date.parse(now) + (DEFAULT_CONFIG.inspect.retry?.first_ms ?? 15 * 60_000)).toISOString(), pid: process.pid});
+  assert.deepEqual([later.state, later.attempt, starts.length], ['retrying', 2, 1]);
+  const beside = idle(f, starts, {at: '2030-01-01T00:00:00.000Z'});
+  assert.deepEqual([beside.state, beside.pid, starts.length], ['running', process.pid, 1], 'the live inspector (this process) blocks a second start');
+});
+
+test('legacy state: a last.json written before the rule (no attempt) is judged by its evidence -- one with no reports cannot establish completeness and is retried; one whose reports are on disk is honoured', async t => {
+  const f = idleRepo(t), starts = [];
+  writeInspection(f, 'last.json', {schema: INSPECTION_SCHEMA, commit: f.head, finished_at: '2026-11-20T00:00:00Z', steps: []});
+  const r = idle(f, starts, {at: '2026-11-22T00:00:00.000Z'});
+  assert.deepEqual([r.state, r.attempt, starts.length], ['retrying', 2, 1], JSON.stringify(r));
+  assert.match(r.incomplete.join(' '), /gates: no result/);
+  const g2 = idleRepo(t), s2 = [];
+  const {attempt, ...legacy} = completeAttempt(g2, g2.head);
+  writeInspection(g2, 'last.json', legacy);
+  assert.deepEqual(lane.inspectionCompleteness(legacy, g2.records), {complete: true, why: []});
+  assert.equal(idle(g2, s2).state, 'already-inspected');
+  fs.rmSync(path.join(g2.records, legacy.steps[0].record));
+  assert.match(lane.inspectionCompleteness(legacy, g2.records).why.join(' '), /gates: the report .* is absent/, 'a report that is gone cannot establish completeness');
 });
