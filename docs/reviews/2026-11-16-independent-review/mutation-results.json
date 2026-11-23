@@ -1,0 +1,626 @@
+{
+  "baseline": {
+    "proof": {
+      "tests": 162,
+      "fail": 24,
+      "names": [
+        "a normal run whose investigation is held is verified before its result is written",
+        "a forged fresh assessment is refused",
+        "governed convergence persists a bounded decision, suppresses noise, and reconsiders a material workload change",
+        "paired investigation verifies actual retained stages and TELOS evidence without replay",
+        "isolated actual runtime replay preserves signed outputs and exactly one effect through both recovery widths",
+        "real pinned TELOS lifecycle, signed receipt, artifact and obligation gate survive restart",
+        "every durable partial fixture proposal resumes without replacing signed history",
+        "recovery preserves and refuses malformed, conflicting signed history and review packets",
+        "worker assertions cannot approve wrong output, wrong hash, scope or exhausted attempts",
+        "accepted input contract cannot change and dependencies need accepted exact versions",
+        "artifact tampering and added unsigned ledger bytes fail final verification",
+        "modified executable plan is refused before any substituted command can run",
+        "forged reviewer and node signatures are independently refused",
+        "source mismatch fails before import and explicit commit pin cannot be substituted",
+        "independent release behavior is signed and activation/rollback bind exact source, state and registry",
+        "caller agreement cannot authorize arbitrary source, routing change or injected failure configuration",
+        "efficiency authority refuses other tuning dimensions and absent retained replay evidence",
+        "a run records its trace and assessment as entries; forged ones are refused and the files are not read",
+        "real TELOS, process interruption, independent watchdog, repair, composition and bounded scale qualification",
+        "real Pantheon fence rejects publication after ownership changes",
+        "cross-department dependency requires an explicit future handoff contract",
+        "restart refuses altered accepted dependency evidence without another destination effect",
+        "independent verifier binds signed obligation and retained candidate to the exact accepted row",
+        "terminating the watchdog drains its separate stalled runtime child"
+      ]
+    },
+    "route": {
+      "tests": 11,
+      "fail": 0,
+      "names": []
+    },
+    "pantheon": {
+      "tests": 812,
+      "fail": 1,
+      "names": [
+        "acceptance uses real filesystem/network isolation and still runs local tools"
+      ]
+    },
+    "client": {
+      "tests": 48,
+      "fail": 0,
+      "names": []
+    }
+  },
+  "results": [
+    {
+      "id": "L1",
+      "what": "author signature not checked",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L2",
+      "what": "order (co-)signature not checked",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L3",
+      "what": "parent linkage not checked",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L4",
+      "what": "genesis anchor not checked",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "proof: K2: a ledger is trusted only through the genesis the reader pinned"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 25
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L5",
+      "what": "checkpoint commitment not checked",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L6",
+      "what": "re-derivation result ignored",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "KILLED",
+      "killers": 15,
+      "firstKillers": [
+        "proof: a board commit is anchored while it stays in the ref history, and a rewrite breaks the anchor",
+        "proof: an entry that does not re-derive is refused before it is written",
+        "proof: view.entries() lists only the entries before the one being checked, in chain order"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 39
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L7",
+      "what": "kind authorship rule ignored",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "KILLED",
+      "killers": 5,
+      "firstKillers": [
+        "proof: the registry is closed, and a kind names who may author it",
+        "proof: a promotion re-derives its own figures, and only the promotion authority records one",
+        "proof: a result re-derives its saving from the cited promotion; a debit is non-negative and never double-charged"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 29
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "L8",
+      "what": "authority change not limited to operators",
+      "file": "ophanim/ledger/chain.mjs",
+      "suites": [
+        "proof",
+        "route"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "proof: K2: only an operator changes the authority, and a revoked key signs nothing after it"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 25
+        },
+        "route": {
+          "tests": 11,
+          "fail": 0
+        }
+      }
+    },
+    {
+      "id": "B1",
+      "what": "accepted row may change between commits",
+      "file": "ophanim/board.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 2,
+      "firstKillers": [
+        "proof: frontier handoff requires the verified transition chain",
+        "proof: the runtime chain refuses a rewritten accepted obligation"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 26
+        }
+      }
+    },
+    {
+      "id": "B2",
+      "what": "delta result digest not checked",
+      "file": "ophanim/board.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "proof: a delta whose recorded result differs is refused when materialized"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 25
+        }
+      }
+    },
+    {
+      "id": "B3",
+      "what": "revision may skip",
+      "file": "ophanim/board.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "B4",
+      "what": "assignment ready-set digest not recomputed",
+      "file": "ophanim/board.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "R1",
+      "what": "gate rejection ignored: every candidate accepted",
+      "file": "ophanim/runtime.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 2,
+      "firstKillers": [
+        "proof: an unchanged blocked convergence is reused and still reports its blockers",
+        "proof: the runtime chain verifies every transition and recomputes assignments"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 26
+        }
+      }
+    },
+    {
+      "id": "R2",
+      "what": "handoff re-verification result ignored",
+      "file": "ophanim/runtime.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "R3",
+      "what": "release decision verification ignored",
+      "file": "ophanim/runtime.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "proof: release activation accepts only an ok:true decision verification"
+      ],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 25
+        }
+      }
+    },
+    {
+      "id": "R4",
+      "what": "effect confirmation ignored",
+      "file": "ophanim/runtime.mjs",
+      "suites": [
+        "proof"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "P1",
+      "what": "REVIEW gate always green",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 5,
+      "firstKillers": [
+        "pantheon: law 7: REVIEW — no ack at all",
+        "pantheon: law 7: REVIEW — an ack from the maker's own lab is not an ack",
+        "pantheon: law 7: GRAFT — a scout orphan is lineage, and becomes an ancestor only on purpose"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 6
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "P2",
+      "what": "TESTS gate always green",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 5,
+      "firstKillers": [
+        "pantheon: law 7: TESTS — green on another revision is not green on this one",
+        "pantheon: the maker's own green run does not satisfy TESTS; an independent run does",
+        "pantheon: a run whose acceptance never passes is refused at integrate with the controller's reason"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 4
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 26
+        }
+      }
+    },
+    {
+      "id": "P3",
+      "what": "maker's own lab counts as a cross-lab ack",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "pantheon: law 7: REVIEW — an ack from the maker's own lab is not an ack"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 2
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "P4",
+      "what": "LEASE gate always green",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 2,
+      "firstKillers": [
+        "pantheon: law 7: LEASE — a ship while the maker still holds its lease races the maker",
+        "proof: a recorded verdict re-derives after the board moves on, refusals and leases included"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 2
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 25
+        }
+      }
+    },
+    {
+      "id": "P5",
+      "what": "ACTOR gate always green",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "KILLED",
+      "killers": 2,
+      "firstKillers": [
+        "pantheon: law 7: the controller ships once every gate holds, and nothing else moves",
+        "pantheon: law 6: every chair in every seating table is refused, lead included"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 3
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "P6",
+      "what": "blocking findings do not block",
+      "file": "pantheon/src/board/integrate.mjs",
+      "suites": [
+        "pantheon",
+        "proof"
+      ],
+      "status": "SURVIVED",
+      "killers": 0,
+      "firstKillers": [],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 1
+        },
+        "proof": {
+          "tests": 162,
+          "fail": 24
+        }
+      }
+    },
+    {
+      "id": "P7",
+      "what": "law 3 same-lab check removed",
+      "file": "pantheon/src/team/law.mjs",
+      "suites": [
+        "pantheon"
+      ],
+      "status": "KILLED",
+      "killers": 2,
+      "firstKillers": [
+        "pantheon: laws refuse a same-lab review, and an unknown action is never a pass",
+        "pantheon: law 3: the checker is a different lab from the maker, and never the assigner"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 3
+        }
+      }
+    },
+    {
+      "id": "P8",
+      "what": "assertReviewCutsAcross same-vendor check removed",
+      "file": "pantheon/src/role/seating.mjs",
+      "suites": [
+        "pantheon"
+      ],
+      "status": "KILLED",
+      "killers": 1,
+      "firstKillers": [
+        "pantheon: a reviewer may not share the producer's vendor"
+      ],
+      "ran": {
+        "pantheon": {
+          "tests": 812,
+          "fail": 2
+        }
+      }
+    },
+    {
+      "id": "C1",
+      "what": "max_tokens counts as a successful stop",
+      "file": "packages/model-client/terminal.mjs",
+      "suites": [
+        "client",
+        "pantheon"
+      ],
+      "status": "KILLED",
+      "killers": 14,
+      "firstKillers": [
+        "pantheon: active Pantheon Fable path strips forbidden fields and detects unary max_tokens",
+        "pantheon: Fable message_stop after max_tokens is incomplete on the streaming path too",
+        "pantheon: anthropic/haiku (direct adapter, unary): success accepted, truncation refused"
+      ],
+      "ran": {
+        "client": {
+          "tests": 48,
+          "fail": 0
+        },
+        "pantheon": {
+          "tests": 812,
+          "fail": 15
+        }
+      }
+    },
+    {
+      "id": "C2",
+      "what": "incomplete Responses status accepted",
+      "file": "packages/model-client/terminal.mjs",
+      "suites": [
+        "client",
+        "pantheon"
+      ],
+      "status": "KILLED",
+      "killers": 4,
+      "firstKillers": [
+        "pantheon: xai/grok-4.5 (direct adapter, unary): success accepted, truncation refused",
+        "pantheon: xai/grok-4.6 (direct adapter, unary): success accepted, truncation refused",
+        "pantheon: xai/grok-4.20-multi-agent (direct adapter, unary): success accepted, truncation refused"
+      ],
+      "ran": {
+        "client": {
+          "tests": 48,
+          "fail": 0
+        },
+        "pantheon": {
+          "tests": 812,
+          "fail": 5
+        }
+      }
+    }
+  ]
+}

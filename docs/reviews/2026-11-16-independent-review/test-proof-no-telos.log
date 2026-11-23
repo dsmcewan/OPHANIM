@@ -1,0 +1,499 @@
+
+> ophanim@0.1.0 test:proof
+> node --test ophanim/governance/*.test.mjs ophanim/efficiency/*.test.mjs ophanim/efficiency/investigation/*.test.mjs ophanim/tests/*.test.mjs ophanim/ledger/*.test.mjs
+
+✔ unchanged gate accepts an explicitly modeled positive case without producing a measured or signed admission (9.977146ms)
+✔ modeled positive case retains real acceptance identity and exact unchanged cost/latency boundaries (1.705608ms)
+✔ one exact nine-node fixture model passes both unchanged screens without creating authority (7.612466ms)
+✔ cold screen admits a plausible worker-dominant DAG with an explicit bounded workload (7.308179ms)
+✔ absent an explicit expected workload, only one convergence is forecast and no experiment is admitted (2.84994ms)
+✔ worker-only critical path does not borrow the worker component of a verification-heavy path (1.115668ms)
+✔ serial, small, verification-dominated and replay-infeasible workloads are declined without a replay (2.238947ms)
+✔ caller estimates cannot lower uncertainty, costs or final-gate allowances (2.535299ms)
+✔ retained negative 15.466-second forecast and p95 blockers prevent another identical recipe (2.900606ms)
+✔ prior evidence requires external verification and exact scope, recipe and accepted results (2.143421ms)
+✔ a new hash or material flag is insufficient; verified condition change needs actual opportunity (2.92145ms)
+✔ caller-supplied analysis cannot turn incomplete or changed observations into opportunity (2.702321ms)
+✔ fork/join critical path uses the longest accepted dependency chain and union occupancy (6.602948ms)
+✔ applicability excludes timing, status, replay history, paths and scheduler slots (1.43834ms)
+✔ failed attempts contribute required work, while replay checks remain separate (0.574315ms)
+✔ partial retained history remains unknown instead of being counted as zero work (1.035137ms)
+✔ scope and obligation identity keep equal inputs from becoming cross-scope reuse recommendations (0.54195ms)
+✔ invalid graphs, intervals, concurrency and incomplete dependency acceptance fail explicitly (1.517397ms)
+✔ zero-duration intervals do not invent overlap or lose an accepted chain (0.440682ms)
+✔ registry has source-backed purposes, contracts and reciprocal consumers (8.000998ms)
+✔ catalog identity is stable across timing and local paths while evidence stays bound (4.385173ms)
+✔ variable discovery references only the existing slots contract and never authorizes it (3.635317ms)
+✔ supplied analysis and registry are checked rather than trusted (6.315528ms)
+✔ reconstructed and missing observations remain null, including apparent idle time (4.013767ms)
+✖ a normal run whose investigation is held is verified before its result is written (5.283467ms)
+✖ a forged fresh assessment is refused (1.68397ms)
+✔ one isolated model turn fits the explicit route and introduces only provisional hypotheses (52.150731ms)
+✔ baseline, declined value, resolved choice, and budget exhaustion use no model or token calls (30.005226ms)
+✔ untrusted output cannot add observables, authority, command data, or complete an interrupted response (30.944042ms)
+✔ token cap refuses before the model, and timeout cannot retry or expose provider errors (96.32001ms)
+✔ each chair becomes one function whose observations are the board-derived counts (2.8666ms)
+✔ rework seen in more than one chair raises an attribution question; without a forecast it stays unresolved (2.862363ms)
+✔ with a declared forecast the question is ranked by information value, still authorizing nothing (0.803778ms)
+✔ rework in only one chair is not an attribution question (0.481812ms)
+✔ a projection carrying seat-change authority, or missing a chair, is refused (0.56539ms)
+✔ a broken occupancy trail blocks ranking and names the chair, even with no rework anywhere (0.36163ms)
+✖ governed convergence persists a bounded decision, suppresses noise, and reconsiders a material workload change (4.978759ms)
+✔ optional recorder preserves missing and invalid boundaries without interrupting work (1.315084ms)
+✔ isolated factorial probe matches frozen output and effect proposal with optional phase collection (873.060312ms)
+✔ malformed scope, unknown method, oversized protocol and expired budget are refused (5.045248ms)
+✔ independent verifier binds a real matched probe and discriminates precise controls without resolving historical causality (846.983202ms)
+✔ noisy phase evidence, too few blocks or excessive overhead stay unresolved (808.600062ms)
+✔ verifier refuses missing, altered, and mismatched raw evidence (881.944386ms)
+✔ missing evidence selects only direct discriminators and preserves unknown historical value (22.895067ms)
+✔ negative value skips read-only authorization and samples, and interrupted claims stay reserved (204.850257ms)
+✔ the same 14 functions retain their contracts and evidence binding (20.389299ms)
+✔ only qualified variable levels are identified and scope guardrails remain immutable (4.847258ms)
+✔ shared and missing metrics preserve uncertainty (16.564272ms)
+✔ independent observations evolve the model without converting comparison to causality (8.453162ms)
+✔ unverified, duplicate, mismatched, and causal claims cannot enter the model (27.020334ms)
+✔ below capacity the decision uses the active history unchanged (1.727334ms)
+✔ at the packet limit the active packets fold into a checkpoint instead of blocking (2.506713ms)
+✔ a checkpoint folds forward when the next epoch fills (2.944261ms)
+✔ capacity stays blocked only when folding cannot make room (2.118738ms)
+✔ two active checkpoints are refused (0.52329ms)
+✔ choose the cheapest equivalent discriminator with positive information value and preserve hard constraints (3.509904ms)
+✔ a fast predicted candidate cannot make an economically unjustified investigation worthwhile (0.577627ms)
+✔ different evidence-driven predictions select a different measurement capability (0.580588ms)
+✔ missing economics leave a bounded proposal design without making up a reason to spend (3.677823ms)
+✔ scope retention suppresses stale inputs and permits independently sourced workload materiality (1.076948ms)
+✔ methods may investigate qualified variables, with fixed budgets and no delegated authority (0.604509ms)
+✔ controller investigations cannot bootstrap from routine optimization (0.430555ms)
+✔ advisory hypotheses remain provisional and cannot carry execution plans or authority (0.427661ms)
+✔ ranking uses each decision’s evidence and value without prescribing a fixed order (0.861293ms)
+✔ shared trace observations can derive a concrete unresolved question without a supplied sequence (0.708876ms)
+✖ paired investigation verifies actual retained stages and TELOS evidence without replay (64.438312ms)
+✔ controlled investigation requires an independently bound manifest and exact scope before TELOS work (2.810602ms)
+✔ a legacy debit aggregate is refused unless it is non-negative integers in the shape its writer produced (24.381306ms)
+✔ a result file counts as a qualified convergence only when it is bound to a recorded use and its trace (62.859005ms)
+✔ missing trace is reconstructed from the committed original context with unknown costs (23.215712ms)
+✔ retained trace and partial replay bytes survive conservative completion without retry (13.063817ms)
+✔ retained graph mutation is refused before creating an assessment (9.582431ms)
+✔ retained attempt input observations must match exact committed inputs (17.207468ms)
+✔ legacy untimestamped convergence is skipped and absent policy is not inferred from current source (13.587613ms)
+✔ stale runtime input is rejected and an unfinished head is not called a convergence (8.276518ms)
+✔ controlled repeats alternate and reject an unbounded repeat request (2.040725ms)
+✖ isolated actual runtime replay preserves signed outputs and exactly one effect through both recovery widths (104.168057ms)
+✔ fresh trace binds graph, accepted request, events, inputs and check envelopes (6.738452ms)
+✔ self-consistent fabricated observations cannot replace committed measurements (6.923802ms)
+✔ verification samples must match candidate, gate decision, timing envelope and exact count (5.500203ms)
+✔ old traces require explicit legacy mode and never return complete assurance (2.224381ms)
+✔ retained accepted replay checks are bound to current opening and cannot be relabeled as new work (1.650452ms)
+✖ real pinned TELOS lifecycle, signed receipt, artifact and obligation gate survive restart (2.451911ms)
+✖ every durable partial fixture proposal resumes without replacing signed history (0.774834ms)
+✖ recovery preserves and refuses malformed, conflicting signed history and review packets (0.758601ms)
+✖ worker assertions cannot approve wrong output, wrong hash, scope or exhausted attempts (0.865536ms)
+✖ accepted input contract cannot change and dependencies need accepted exact versions (0.759326ms)
+✖ artifact tampering and added unsigned ledger bytes fail final verification (1.234511ms)
+✖ modified executable plan is refused before any substituted command can run (0.600081ms)
+✖ forged reviewer and node signatures are independently refused (0.602926ms)
+✖ source mismatch fails before import and explicit commit pin cannot be substituted (0.722024ms)
+✖ independent release behavior is signed and activation/rollback bind exact source, state and registry (0.930267ms)
+✖ caller agreement cannot authorize arbitrary source, routing change or injected failure configuration (0.603601ms)
+✔ scheduler benefit uses worst candidate, best baseline, full trial cost and explicit forecast (0.362578ms)
+✖ efficiency authority refuses other tuning dimensions and absent retained replay evidence (0.68154ms)
+✔ a board commit is anchored while it stays in the ref history, and a rewrite breaks the anchor (21.351431ms)
+﹣ a TELOS proposal head is anchored and re-derived by the pinned TELOS code (0.123797ms) # OPHANIM_TELOS_ROOT not set
+✔ the TELOS resolver loads only the pinned source (0.902065ms)
+✔ entries from several authors chain, and every one re-derives on verify (17.633286ms)
+✔ an entry that does not re-derive is refused before it is written (7.71516ms)
+✔ the registry is closed, and a kind names who may author it (7.439958ms)
+✔ an entry is signed by its own author: a key cannot write as another seat (3.473425ms)
+✔ a citation must point earlier in the chain (2.145648ms)
+✔ editing, reordering, deleting or truncating anything is caught on verify (12.883242ms)
+✔ checkpoints let verification resume, while any edit before them is still caught (23.068014ms)
+✔ an append refuses to extend a ledger that no longer verifies (4.019132ms)
+✔ K2: a ledger is trusted only through the genesis the reader pinned (6.200636ms)
+✔ K2: only an operator changes the authority, and a revoked key signs nothing after it (13.003762ms)
+✔ view.entries() lists only the entries before the one being checked, in chain order (14.099702ms)
+✔ a promotion re-derives its own figures, and only the promotion authority records one (18.270398ms)
+✔ a use cites its promotion, and the 20-use cap is counted from the chain itself (167.421625ms)
+✔ a result re-derives its saving from the cited promotion; a debit is non-negative and never double-charged (33.515622ms)
+✔ totals are read only from a ledger that verifies: an edited debit stops them (10.189056ms)
+✔ the assessment records its result and debit on the ledger and measures from the ledger, not the side files (116.550588ms)
+✖ a run records its trace and assessment as entries; forged ones are refused and the files are not read (7.269295ms)
+✔ a recorded verdict re-derives after the board moves on, refusals and leases included (115.509819ms)
+✔ a forged verdict is refused: flipped tests_passed, a quietly green gate, a dropped lease (72.166625ms)
+✔ heads that are not on this board are refused (46.228434ms)
+✔ gatesAt is the live dry run, read through named heads (36.893802ms)
+✔ facts carry their evidence: an uncited figure is refused (16.340214ms)
+✔ seating cites the facts it seats, and every seated model is a fact or a lane (14.869585ms)
+✔ an escalation re-derives against the facts it CITES, not the code of the day (36.336339ms)
+✔ the recorder keeps the run annotations beside the record and chains decisions per piece of work (19.350622ms)
+✔ a contribution re-derives from the board heads it names, after the board has moved on (23.240744ms)
+✔ a turn is signed by the seat occupancy that answered, and records requested and served model (25.046696ms)
+✔ a turn is refused when its reply, its id or its model does not hold (17.183832ms)
+✔ cold review: no seat, lab or response in the lineage of what it reviews (38.273897ms)
+✔ sendTurn reports the served model on every surface, unary and streamed (2.695012ms)
+✔ workers derive fixture outputs from inputs and accepted dependencies without the oracle (4.439588ms)
+✔ missing request facts fail rather than being invented (1.501745ms)
+✔ planning worker proposes a bounded DAG and validator rejects changed scope, dependency and ownership (1.409038ms)
+✔ synthetic destination detects conflicting duplicate identity and records every apply invocation (2.489741ms)
+✔ frontier handoff re-verifies only accepted rows that open work consumes (185.51876ms)
+✔ the trace binding accepts exactly the recorded frontier replays (76.286071ms)
+✔ frontier handoff requires the verified transition chain (43.401485ms)
+✔ a settled head reused under frontier handoff makes no TELOS calls (39.19662ms)
+✔ refill scheduling fills a freed slot before the slow attempt finishes (332.97976ms)
+✔ refill produces the same accepted outputs as wave scheduling (194.28842ms)
+✔ a refill assignment that hides an attempt in flight is refused (90.975222ms)
+✔ unknown schedule or handoff modes are refused (0.373476ms)
+✔ a settled head with nothing unresolved is reused without writing a new record (72.936977ms)
+✔ an unchanged blocked convergence is reused and still reports its blockers (18.019407ms)
+✔ a new obligation or an interrupted head is not mistaken for equilibrium (73.530266ms)
+✔ work.started records the ready set and rank that determine each assignment (51.199625ms)
+✔ planning requires governance plan registration (1.537169ms)
+✔ release activation accepts only an ok:true decision verification (8.016943ms)
+✔ governance requires an explicit TELOS checkout (0.526041ms)
+✔ the runtime chain verifies every transition and recomputes assignments (125.754152ms)
+✔ the runtime chain refuses a rewritten accepted obligation (36.084064ms)
+✔ the runtime chain refuses an assignment that does not follow from the ready set (39.297211ms)
+✔ efficiency debits are write-once per trace and totals are derived (5.512215ms)
+✔ intermediate commits are deltas and settled heads are full checkpoints (68.48863ms)
+✔ an interrupted delta head materializes for recovery (36.703587ms)
+✔ a long session takes a checkpoint every interval (461.217036ms)
+✔ a delta whose recorded result differs is refused when materialized (29.317317ms)
+✔ boards written as full v1 snapshots still decode and verify (30.010524ms)
+✖ real TELOS, process interruption, independent watchdog, repair, composition and bounded scale qualification (111.618787ms)
+✖ real Pantheon fence rejects publication after ownership changes (1.675142ms)
+✖ cross-department dependency requires an explicit future handoff contract (0.588699ms)
+✖ restart refuses altered accepted dependency evidence without another destination effect (0.383504ms)
+✖ independent verifier binds signed obligation and retained candidate to the exact accepted row (0.413716ms)
+✖ terminating the watchdog drains its separate stalled runtime child (8020.3598ms)
+ℹ tests 162
+ℹ suites 0
+ℹ pass 137
+ℹ fail 24
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 17682.479381
+
+✖ failing tests:
+
+test at ophanim/efficiency/fresh-verification.test.mjs:22:1
+✖ a normal run whose investigation is held is verified before its result is written (5.283467ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+
+test at ophanim/efficiency/fresh-verification.test.mjs:35:1
+✖ a forged fresh assessment is refused (1.68397ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+
+test at ophanim/efficiency/investigation/controller.test.mjs:26:1
+✖ governed convergence persists a bounded decision, suppresses noise, and reconsiders a material workload change (4.978759ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+
+test at ophanim/efficiency/investigation/verify.test.mjs:15:1
+✖ paired investigation verifies actual retained stages and TELOS evidence without replay (64.438312ms)
+  AssertionError [ERR_ASSERTION]: Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+  
+  
+  1 !== 0
+  
+      at runPairedProbe (file:///home/claude/dsmcewan/ophanim/ophanim/efficiency/admission-proof.mjs:210:12)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/efficiency/investigation/verify.test.mjs:18:15)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: 1,
+    expected: 0,
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at ophanim/efficiency/replay.test.mjs:36:1
+✖ isolated actual runtime replay preserves signed outputs and exactly one effect through both recovery widths (104.168057ms)
+  Error: {"schema":"ophanim.watchdog/v1","watchdogPid":4801,"workerPid":4808,"startedAt":1794878505052,"endedAt":1794878505116,"durationMs":64,"heartbeats":1,"reason":"worker-exited","exitCode":1,"signal":null,"events":[],"stdout":"","stderr":"Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot\n    at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)\n    at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)\n    at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14\n"}
+      at ChildProcess.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/efficiency/replay.test.mjs:25:79)
+      at ChildProcess.emit (node:events:514:28)
+      at maybeClose (node:internal/child_process:1172:16)
+      at Socket.<anonymous> (node:internal/child_process:527:11)
+      at Socket.emit (node:events:514:28)
+      at Pipe.<anonymous> (node:net:362:12)
+
+test at ophanim/governance/governance.test.mjs:38:1
+✖ real pinned TELOS lifecycle, signed receipt, artifact and obligation gate survive restart (2.451911ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:39:26)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at ophanim/governance/governance.test.mjs:52:1
+✖ every durable partial fixture proposal resumes without replacing signed history (0.774834ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:57:28)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:75:1
+✖ recovery preserves and refuses malformed, conflicting signed history and review packets (0.758601ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:77:28)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:106:1
+✖ worker assertions cannot approve wrong output, wrong hash, scope or exhausted attempts (0.865536ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:107:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:116:1
+✖ accepted input contract cannot change and dependencies need accepted exact versions (0.759326ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:117:26)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:134:1
+✖ artifact tampering and added unsigned ledger bytes fail final verification (1.234511ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:135:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:146:1
+✖ modified executable plan is refused before any substituted command can run (0.600081ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:147:26)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:155:1
+✖ forged reviewer and node signatures are independently refused (0.602926ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:156:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:167:1
+✖ source mismatch fails before import and explicit commit pin cannot be substituted (0.722024ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:168:22)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:176:1
+✖ independent release behavior is signed and activation/rollback bind exact source, state and registry (0.930267ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:177:26)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:200:1
+✖ caller agreement cannot authorize arbitrary source, routing change or injected failure configuration (0.603601ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:201:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/governance/governance.test.mjs:232:1
+✖ efficiency authority refuses other tuning dimensions and absent retained replay evidence (0.68154ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:13:37)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:27:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/governance/governance.test.mjs:233:21)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+
+test at ophanim/ledger/efficiency-kinds.test.mjs:157:1
+✖ a run records its trace and assessment as entries; forged ones are refused and the files are not read (7.269295ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+
+test at ophanim/tests/qualification.test.mjs:8:1
+✖ real TELOS, process interruption, independent watchdog, repair, composition and bounded scale qualification (111.618787ms)
+  Error: unit refused: Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at runRequest (file:///home/claude/dsmcewan/ophanim/ophanim/cli.mjs:68:27)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async file:///home/claude/dsmcewan/ophanim/pantheon/src/seat/lock.mjs:278:14
+  
+      at run (file:///home/claude/dsmcewan/ophanim/ophanim/proof.mjs:65:52)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async runQualification (file:///home/claude/dsmcewan/ophanim/ophanim/proof.mjs:81:16)
+      at async TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/qualification.test.mjs:10:16)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at ophanim/tests/runtime-boundaries.test.mjs:20:1
+✖ real Pantheon fence rejects publication after ownership changes (1.675142ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:15:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:21:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.start (node:internal/test_runner/test:1262:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17)
+
+test at ophanim/tests/runtime-boundaries.test.mjs:34:1
+✖ cross-department dependency requires an explicit future handoff contract (0.588699ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:15:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:35:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3)
+
+test at ophanim/tests/runtime-boundaries.test.mjs:42:1
+✖ restart refuses altered accepted dependency evidence without another destination effect (0.383504ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:15:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:43:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at ophanim/tests/runtime-boundaries.test.mjs:56:1
+✖ independent verifier binds signed obligation and retained candidate to the exact accepted row (0.413716ms)
+  Error: Explicit absolute TELOS checkout required: set OPHANIM_TELOS_ROOT or pass telosRoot
+      at fail (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:40:30)
+      at createGovernance (file:///home/claude/dsmcewan/ophanim/ophanim/governance.mjs:65:69)
+      at setup (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:15:26)
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/runtime-boundaries.test.mjs:57:23)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1402:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:974:18)
+      at Test.postRun (node:internal/test_runner/test:1542:19)
+      at Test.run (node:internal/test_runner/test:1467:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:974:7)
+
+test at ophanim/tests/watchdog.test.mjs:10:1
+✖ terminating the watchdog drains its separate stalled runtime child (8020.3598ms)
+  AssertionError [ERR_ASSERTION]: Runtime did not reach injected stall: 
+      at TestContext.<anonymous> (file:///home/claude/dsmcewan/ophanim/ophanim/tests/watchdog.test.mjs:21:12)
+      at async Test.run (node:internal/test_runner/test:1409:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: false,
+    expected: true,
+    operator: '==',
+    diff: 'simple'
+  }
+
+real	0m17.828s
+user	0m8.434s
+sys	0m1.561s
+exit=1
