@@ -101,7 +101,7 @@ test("compareExport refuses any difference: a changed blob, a missing path, an e
 test("a codex run reviews the fresh copy: the header records review_copy (HEAD, tree, the source commit's blob ids, the withheld count)", async () => {
   const f = await setup();
   const r = await run(f, { n: 2 });
-  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   const h = headerOf(await r.read("findings-2-openai.md"));
   assert.match(h, new RegExp(`^- review_copy: fresh single-commit git repository .*: HEAD \`[0-9a-f]{40}\` \\(tree \`[0-9a-f]{40}\`\\), \\d+ file\\(s\\) whose modes and blob ids equal \`${f.repo.commit}\`'s \\(tree \`[0-9a-f]{40}\`\\), 1 withheld path\\(s\\) never written into it$`, "m"));
   const t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
@@ -118,7 +118,7 @@ test("the codex scratch TMPDIR is at most 48 bytes: under the review temp base w
   assert.deepEqual(scratchCandidates(owner).map(scratchFits), [false, true]);
   const f = await setup();
   let r = await run(f, { n: 4 });
-  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   const near = r.plan.scratch_tmp;
   assert.ok(near.bytes <= SCRATCH_TMP_MAX && near.path.startsWith(r.d.tmpBase + "/t-"), JSON.stringify(near));
   assert.equal(r.sdk[0].tmpdir, near.path, "the SDK's env carries it as TMPDIR");
@@ -126,7 +126,7 @@ test("the codex scratch TMPDIR is at most 48 bytes: under the review temp base w
   // A long temp base (as on the owner's host): /var/tmp, removed after the run.
   const long = join(await mkdtemp(join(tmpdir(), "rr-r2-long-")), "x".repeat(70));
   r = await run(f, { n: 4, args: ["--force"], extra: { tmpBase: long } });
-  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   assert.ok(r.plan.scratch_tmp.path.startsWith("/var/tmp/ophanim-rt-") && r.plan.scratch_tmp.bytes <= SCRATCH_TMP_MAX, r.plan.scratch_tmp.path);
   assert.equal(r.sdk[0].tmpdir, r.plan.scratch_tmp.path);
   assert.equal(existsSync(r.plan.scratch_tmp.path), false, "removed after the run");
@@ -165,7 +165,7 @@ test("on WSL (detected, or --codex-outer-runtime on) codex and every preflight r
   assert.match(r.plan.preflight.checks.version.text, /marker=visible/);
   // WSL detected from the kernel release.
   r = await run(f, { n: 2, env: { FAKE_CODEX_MARKER: marker, WSL_INTEROP: "/run/WSL/1_interop" }, extra: { osRelease: "5.15.167.4-microsoft-standard-WSL2" } });
-  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   const o = r.plan.codex_outer_runtime;
   assert.deepEqual([o.applied, o.wsl, o.mode], [true, true, "auto"]);
   assert.match(r.plan.preflight.checks.version.text, /marker=hidden/, "the preflight ran inside the outer namespace (private /tmp)");

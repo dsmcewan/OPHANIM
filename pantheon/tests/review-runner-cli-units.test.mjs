@@ -11,6 +11,7 @@ import { decide, loadPolicy } from "../src/agy/jail-hook.mjs";
 import { prepareReviewWorkspace, reviewCardText, reviewLane, REVIEW_CARD, REVIEW_AGENT } from "../src/review-runner/agy.mjs";
 import { allowedCommands, compareWorktree, readRule, reviewTmpBase, sandboxNote, scrubEnv, writeRule, READ_ONLY_SHELL } from "../src/review-runner/cli-common.mjs";
 import { renderHarness } from "../src/review-runner/brief.mjs";
+import { relayLines } from "../src/review-runner/relay.mjs";
 import { checkPromptPermissions, codexPermissionProfile, codexSdkOptions, codexThreadOptions, findCodexSession, parsePromptPermissions, inspectCodexSdk, parseCodexEvents, parseLoginStatus, parseModelList, sdkKeyInjection, sdkSpawnArgv } from "../src/review-runner/codex.mjs";
 import { Codex as RealCodex } from "@openai/codex-sdk";
 import { grokBwrapArgs, parseGrokStream } from "../src/review-runner/grok.mjs";
@@ -286,9 +287,11 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
   assert.doesNotMatch(tpl, /You may run only these commands/, "the 09d490f wording that kept a literal reader from reading any source");
   const permissions = permissionsFor(CLOSED, ["pantheon/tests/a.test.mjs"]);
   for (const transport of ["codex-sdk", "grok-cli", "agy-cli"]) {
-    // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): agy and grok list the review's verify launchers; codex
-    // lists none (its sandbox cannot start the verify jail) and says why.
-    const cmds = allowedCommands({ permissions, worktree: "/w", ...(transport !== "codex-sdk" ? { launcherDir: "/c" } : { testsRefused: "the codex transport runs no test" }), envPrefix: transport === "codex-sdk" ? "env NO_PROXY=127.0.0.1 " : "" });
+    // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): agy and grok list the review's verify launchers to run;
+    // codex lists the same launchers to REQUEST (its sandbox cannot start the verify jail): the runner runs them (relay.mjs,
+    // owner direction 2026-11-21).
+    const cmds = allowedCommands({ permissions, worktree: "/w", launcherDir: "/c" });
+    if (transport === "codex-sdk") cmds.lines = relayLines({ lines: cmds.lines, commit: "c" });
     const h = renderHarness(tpl, { COMMIT: "c", WORKTREE: "/w", ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed: false, worktree: "/w" }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: "/r/tmp" }), MAX_WALL_S: 60 });
     assert.doesNotMatch(h, /\{\{/, transport);
@@ -296,10 +299,15 @@ test("HARNESS-cli.md: reading the source is explicitly permitted beside the test
     assert.match(h, /Apart from reading, you may run only these test commands, exactly as written/, transport);
     assert.match(h, /You may not create, change or delete any file/, transport);
     assert.match(h, /Make no network request and no call to a model provider/, transport);
-    if (transport !== "codex-sdk") assert.match(h, /bwrap unavailable/, transport);   // codex runs no test at all (L-404)
+    if (transport !== "codex-sdk") assert.match(h, /bwrap unavailable/, transport);   // no test runs in codex's own sandbox (L-404)
     if (transport === "agy-cli") { assert.match(h, /`view_file`/); assert.match(h, /`run_command` is limited to that list/); assert.match(h, /- `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/); assert.match(h, /verify jail/); assert.match(h, /no network at all/); }
     else { for (const c of READ_ONLY_SHELL) assert.ok(h.includes(`\`${c}\``), `${transport}: ${c}`); assert.match(h, /no `sed -i`/); }
-    if (transport === "codex-sdk") { assert.match(h, /`\/r\/tmp`/); assert.match(h, /- none: the codex transport runs no test/); assert.doesNotMatch(h, /node --test pantheon/); assert.match(h, /No test runs in this transport/); }
+    if (transport === "codex-sdk") {
+      assert.match(h, /`\/r\/tmp`/); assert.doesNotMatch(h, /node --test pantheon/); assert.match(h, /No test runs inside this sandbox/);
+      assert.match(h, /- none that you run yourself: .*The RUNNER runs a test for you instead/);
+      assert.match(h, /section headed exactly `## Test requests`/); assert.match(h, /section headed exactly `## Relayed test conclusions`/);
+      assert.match(h, /  - `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/, "the launcher, listed as a command to request");
+    }
     if (transport === "grok-cli") { assert.match(h, /- `\/c\/pantheon-test pantheon\/tests\/a\.test\.mjs`/); assert.match(h, /verify jail/); assert.doesNotMatch(h, /`node --test pantheon/); }
   }
   assert.equal(reviewTmpBase({ HOME: "/home/fixture" }), "/home/fixture/.cache/ophanim-review", "review worktrees are not put under /tmp");

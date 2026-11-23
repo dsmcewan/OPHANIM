@@ -203,9 +203,11 @@ export function fakeReviewClis(dir) {
  *   hang    waits for the abort signal, then throws its reason (as the SDK does when spawn's signal fires)
  *   deaf    ignores the abort signal and never ends (the runner's backstop)
  */
-export function fakeCodexSdk() {
+// `replies` (the test relay, relay.mjs): one function per turn, in order across the run's threads, given the turn's input
+// and returning the agent's final message; without it every turn replies with the default findings below.
+export function fakeCodexSdk({ replies = null } = {}) {
   const calls = [];
-  let n = 0;
+  let n = 0, turnNo = 0;
   class Thread {
     constructor(codex, threadOptions, id) { this._codex = codex; this._t = threadOptions; this._id = id; this._resumed = id; }
     get id() { return this._id; }
@@ -238,7 +240,9 @@ export function fakeCodexSdk() {
         yield { type: "turn.failed", error: { message: "usage limit reached" } };
         throw new Error("Codex Exec exited with code 1: fatal: usage limit reached");
       }
-      const text = `# Findings (fake codex)\n\n${check}1. holds\n\nModel: ${t.model}\n`;
+      const scripted = replies ? replies[turnNo++] : null;
+      if (replies && !scripted) throw new Error(`fake codex: no scripted reply for turn ${turnNo}`);
+      const text = scripted ? scripted(input) : `# Findings (fake codex)\n\n${check}1. holds\n\nModel: ${t.model}\n`;
       yield { type: "item.completed", item: { id: "i2", type: "agent_message", text } };
       yield { type: "turn.completed", usage: { input_tokens: 100, cached_input_tokens: 10, output_tokens: 20 } };
     }

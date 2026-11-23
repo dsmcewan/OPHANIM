@@ -10,7 +10,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { main, EXIT } from "../src/review-runner/index.mjs";
-import { CODEX_TESTS_REFUSED } from "../src/review-runner/subscription.mjs";
+import { CODEX_TEST_RELAY } from "../src/review-runner/subscription.mjs";
 import { sandboxAvailable } from "../src/agy/sandbox.mjs";
 import { fixtureRepo, fakeFetch, capture, deps, FAKE_KEY, sh, mkdtemp, cleanup, REAL_ROOT, REVIEW_DIR } from "./review-runner-helper.mjs";
 import { fakeCodexSdk, fakeReviewClis } from "./fixtures/review-clis.mjs";
@@ -102,9 +102,14 @@ test("codex dry run: the SDK transport, the zero-spend preflights on the SDK's b
   const tmpEntry = pp.expected_entries.find(e => e.startsWith("write ") && !e.endsWith(".review-tests"));
   assert.ok(tmpEntry && !tmpEntry.slice(6).startsWith(p.worktree.path + "/"), "the scratch TMPDIR is outside the worktree");
   assert.ok(p.env.passed.includes("TMPDIR"));
-  // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): codex's sandbox cannot start the verify jail, so codex
-  // lists NO test command, says why, and its profile denies node (the node install is no longer a read root).
-  assert.deepEqual(p.allowed_commands, [`- none: ${CODEX_TESTS_REFUSED}`]);
+  // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): codex's sandbox cannot start the verify jail, so codex runs
+  // no test command itself and its profile denies node (the node install is no longer a read root). Its tests are
+  // RELAYED (relay.mjs, owner direction 2026-11-21): it is shown the review's verify launchers to REQUEST.
+  assert.match(p.allowed_commands[0], /^- none that you run yourself: .*The RUNNER runs a test for you instead/);
+  assert.ok(p.allowed_commands.some(l => /^  - `\/\S+\/control\/pantheon-test <files>`, where `<files>` is/.test(l)), "the review's test launcher, to request");
+  assert.ok(p.allowed_commands.some(l => /^  - `\/\S+\/control\/pantheon-suite-proof` \(it runs /.test(l)), "the review's suite launchers, to request");
+  assert.deepEqual([p.test_relay.how, p.test_relay.max_rounds, p.test_relay.max_tests, p.test_relay.requests_heading, p.test_relay.conclusions_heading],
+    [CODEX_TEST_RELAY, 3, 12, "Test requests", "Relayed test conclusions"]);
   assert.equal(p.sandbox.filesystem[realpathSync(process.execPath)], "deny", "the node binary is denied in codex's sandbox");
   assert.ok(pp.expected_entries.includes(`deny ${realpathSync(process.execPath)}`));
   assert.ok(!Object.entries(p.sandbox.filesystem).some(([k, v]) => v === "read" && realpathSync(process.execPath).startsWith(k + "/")), "the node install is not readable");
@@ -142,14 +147,17 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
   const h = headerOf(md);
   for (const line of ["- status: incomplete", "- via: subscription", "- transport: codex-sdk", "- cli_version: `codex-cli 9.9.9-fake`", "- auth_method_observed: chatgpt",
     "- subscription_coverage: documented", "- requested_model: `gpt-6.1-sol`", "- served_model: `gpt-6.1-sol`", "- policy_violations: none"]) assert.ok(h.includes(line + "\n"), line);
-  assert.match(h, /- stop_reason: coverage gate: no test ran although the testing limit allows tests: the codex transport runs no test.*\(the transport ended with: final answer\)\n/);
+  // The reviewer requested no relayed test, so no test ran: the coverage gate (L-501).
+  assert.match(h, /- stop_reason: coverage gate: no test command ran although the testing limit allows tests \(the transport ended with: final answer\)\n/);
+  assert.match(h, /- test_relay: 0 requested by the reviewer, 0 ran in the runner's verify jail, 0 refused, 0 not run; conclusions on 0 of 0; per request in the transcript's test_relay\n/);
   assert.match(h, /- coverage: `\{"source_reads":1,"denied_reads":0,"tests_run":0,"tests_allowed":true\}`, gate FAILED .*files read \(sample\): `hello\.txt`\n/);
   assert.match(h, /- served_model_source: input/);
   assert.match(h, /- sandbox: codex permission profile ophanim-review .*writes a scratch TMPDIR outside the worktree.*approvals never/);
   assert.match(h, /- usage_totals: `\{"input_tokens":100,"cached_input_tokens":10,"output_tokens":20\}`/);
   assert.equal(bodyOf(md), "# Findings (fake codex)\n\n1. holds\n\nModel: gpt-6.1-sol\n");
   assert.deepEqual([t.via, t.transport, t.status, t.worktree_check.violations], ["subscription", "codex-sdk", "incomplete", []]);
-  assert.deepEqual([t.coverage.source_reads, t.coverage.tests_run, t.coverage.tests_refused, t.coverage_gate.ok], [1, 0, CODEX_TESTS_REFUSED, false]);
+  assert.deepEqual([t.coverage.source_reads, t.coverage.tests_run, t.coverage.tests_refused, t.coverage_gate.ok], [1, 0, null, false]);
+  assert.deepEqual([t.test_relay.counts.requested, t.test_relay.rounds, t.cli.turns.length], [0, [], 1], "no request: one turn, no relay round");
   assert.match(t.cli.thread_id, /^01a1f0fe-/, "the thread id is recorded (for --continue)");
   assert.deepEqual([t.cli.commands.length, t.cli.turns_completed, t.cli.errors], [2, 1, ["Reconnecting... 1/5 (stream disconnected)"]], "a retry error event is recorded, not a failure");
   assert.ok(t.cli.own.some(o => o.kind === "your message"));
@@ -162,9 +170,9 @@ test("codex run, assignment 4: the SDK gets the scrubbed env, the pinned binary,
 test("codex through the REAL @openai/codex-sdk spawning the fake binary: the argv it builds is the plan's, the prompt goes to stdin, no key in its env", async () => {
   const f = await setup();
   const r = await run(f, { n: 2, args: ["--max-wall-s", "60"], realSdk: true });
-  // The fake binary reads nothing and codex runs no test: the coverage gate makes the run incomplete (L-501, L-404).
+  // The fake binary reads nothing and requests no relayed test: the coverage gate makes the run incomplete (L-501).
   assert.equal(r.code, EXIT.incomplete, r.out.err);
-  assert.match(r.out.err, /run-review: incomplete \(coverage gate: no source file was read; no test ran/);
+  assert.match(r.out.err, /run-review: incomplete \(coverage gate: no source file was read; no test command ran/);
   const log = await calls(f.log);
   const exec = log.find(x => x.argv?.[0] === "exec");
   const t = JSON.parse(await r.read("findings-2-openai.transcript.json"));
@@ -487,7 +495,7 @@ test("--reviewer openai:<model> on assignment 1: codex-sdk transport, its ChatGP
 test("--reviewer on a codex run: the header and transcript record the substitution; assignment 4 still writes nothing", async () => {
   const f = await setup();
   const r = await run(f, { n: 4, args: ["--max-wall-s", "60", "--reviewer", "openai:gpt-6-astra"] });
-  assert.equal(r.code, EXIT.incomplete, r.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r.code, EXIT.incomplete, r.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   assert.ok(r.files.includes("findings-4-openai.md"));
   overrideHeader(headerOf(await r.read("findings-4-openai.md")), { lab: "OpenAI", model: "gpt-6-astra", def: "OpenAI, `gpt-6.1-sol`" });
   const t = JSON.parse(await r.read("findings-4-openai.transcript.json"));

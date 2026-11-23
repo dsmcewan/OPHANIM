@@ -177,8 +177,9 @@ test("codex: a failed run is continued by resuming its own thread (the SDK's res
   assert.deepEqual([t1.status, t1.stop_reason], ["failed", "codex reported turn.failed: usage limit reached"]);
   const promptFile = join(f.base, "prompt.txt");
   const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
-  assert.equal(r2.code, EXIT.incomplete, r2.out.err);   // finished, but codex runs no test (L-404): the coverage gate (L-501)
-  assert.match(r2.out.err, /coverage gate: no test ran although the testing limit allows tests: the codex transport runs no test/);
+  // Finished, but this reviewer requested no relayed test (relay.mjs), so no test ran: the coverage gate (L-501).
+  assert.equal(r2.code, EXIT.incomplete, r2.out.err);
+  assert.match(r2.out.err, /coverage gate: no test command ran although the testing limit allows tests/);
   assert.equal(r2.plan.continue.method, "codex-sdk-resume");
   assert.equal(r2.plan.continue.thread_id, t1.cli.thread_id);
   const ran = r2.sdk.find(c => c.kind === "run");
@@ -214,7 +215,7 @@ test("codex without the earlier thread on this machine: a new session whose prom
   await rm(join(f.home, ".codex", "sessions"), { recursive: true, force: true });   // the thread's rollout is gone
   const promptFile = join(f.base, "prompt.txt");
   const r2 = await sub(f, { n: 2, args: ["--continue", tpath], env: { FAKE_CLI_PROMPT_FILE: promptFile, FAKE_CLI_CHECK: ".review-tests/mine.test.mjs" } });
-  assert.equal(r2.code, EXIT.incomplete, r2.out.err);   // codex runs no test (L-404): the coverage gate (L-501)
+  assert.equal(r2.code, EXIT.incomplete, r2.out.err);   // no relayed test was requested, so none ran: the coverage gate (L-501)
   assert.equal(r2.plan.continue.method, "replayed-own-transcript");
   assert.match(r2.plan.continue.resume_support.source, /resumeThread/);
   assert.equal(r2.sdk.find(c => c.kind === "run").resume_id, null);

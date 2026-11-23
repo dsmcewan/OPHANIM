@@ -24,7 +24,7 @@ import { REVIEW_DIR, SEPARATOR, renderHarness, reviewerHeaderLines, sha256 } fro
 import { WITHHELD } from "./sandbox.mjs";
 import { redact } from "./vendors.mjs";
 import { allowedCommands, compareWorktree, findCli, readRule, reviewTmpBase, runCli, sandboxNote, scrubEnv, secretValues, tail, worktreeState, writeRule, REVIEW_TESTS_DIR } from "./cli-common.mjs";
-import { CODEX_SDK_PACKAGE, LOOPBACK_NO_PROXY, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv,
+import { CODEX_SDK_PACKAGE, codexPermissionProfile, codexPreflight, codexSdkOptions, codexThreadOptions, findCodexSession, inspectCodexSdk, runCodexSdk, sdkSpawnArgv,
   SCRATCH_TMP_MAX, UNIX_SOCKET_PATH_MAX, codexOuterLauncher, detectWsl, readOsRelease, scratchCandidates, scratchFits } from "./codex.mjs";
 import { dropGrokScratch, grokArgv, grokBwrapArgs, grokLauncherAllow, grokPreflight, grokStateScratch, grokStopFailure, NEEDS_KEY, parseGrokStream } from "./grok.mjs";
 import { exportReviewCopy, REVIEW_COPY_KIND } from "./review-copy.mjs";
@@ -32,6 +32,7 @@ import { REVIEW_AGENT, prepareReviewWorkspace, reviewLane, writeReviewLaunchers 
 import { coverageGate, coverageHeaderLine, coverageOfAgy, coverageOfCodex, coverageOfGrok, gatedStatus, mergeCoverage, testsAllowedBy } from "./coverage.mjs";
 import { defaultAgyStateDirs, dropGeminiState, sandboxAvailable } from "../agy/sandbox.mjs";
 import { AGY_MODEL_MISMATCH, prepareWorkerJail, readJailLog, redactStrong, runAgyPreflight, runAgyWorkerTurn, workerArgv, workerEnv } from "../board/agy-cli.mjs";
+import { CONCLUSIONS_HEADING, EXECUTED_BY as RELAY_EXECUTED_BY, JAIL as RELAY_JAIL, MAX_RELAY_ROUNDS, MAX_RELAY_TESTS, REQUESTS_HEADING, relayLines, relayLoop } from "./relay.mjs";
 import { CLI_CONTINUE_NOTE, ContinueRefusal, captureReviewTests, cumulative, loadContinuation, ownTranscriptAppendix, preserveFiles, restoreReviewTests } from "./continue.mjs";
 
 // --continue in subscription mode: what each CLI documents about a headless resume, and what the runner does with it.
@@ -49,8 +50,29 @@ const capOwn = own => { const out = []; let n = 0; for (const x of [...own].reve
 export const SUB_PLAN_SCHEMA = "ophanim.review-run-plan/v2-subscription";
 export const TRANSPORT_FOR = Object.freeze({ gemini: "agy-cli", openai: "codex-sdk", xai: "grok-cli" });
 export const COVERAGE = Object.freeze({ "agy-cli": "documented", "codex-sdk": "documented", "grok-cli": "undocumented" });
-/** Why codex runs no test (L-404): its own sandbox cannot start the verify jail. */
-export const CODEX_TESTS_REFUSED = "the codex transport runs no test: the code under review runs only in the runner's verify jail, and codex's own sandbox cannot start it (nested namespaces are refused there), so a test would run as codex's child next to its login (L-404, self-audit round 3, assignment 4)";
+/**
+ * One codex review across its relayed turns (relay.mjs relayLoop): the LAST turn's status, stop reason and final text,
+ * the usage summed, and a record whose commands, file changes and own messages are every turn's, in order (the coverage
+ * gate reads them all), with `turns` naming each one.
+ */
+/** The findings header's test_relay line. */
+export const relayLine = t => `${t.counts.requested} requested by the reviewer, ${t.counts.ran_in_jail} ran in the runner's verify jail, ${t.counts.refused} refused, ${t.counts.not_run} not run; conclusions on ${t.counts.concluded} of ${t.counts.ran_in_jail}${t.counts.unconcluded.length ? ` (none on ${t.counts.unconcluded.join(", ")})` : ""}; per request in the transcript's test_relay`;
+
+export function mergeRelayedTurns(first, loop) {
+  const all = [first, ...loop.turns], last = loop.final;
+  const usage = {};
+  for (const t of all) for (const [k, v] of Object.entries(t.usage ?? {})) if (typeof v === "number") usage[k] = (usage[k] ?? 0) + v;
+  const recs = all.map(t => t.record ?? {});
+  const record = { ...(last.record ?? {}), thread_id: first.record?.thread_id ?? last.record?.thread_id ?? null,
+    events: recs.reduce((n, x) => n + (x.events ?? 0), 0), turns_completed: recs.reduce((n, x) => n + (x.turns_completed ?? 0), 0),
+    commands: recs.flatMap(x => x.commands ?? []), file_changes: recs.flatMap(x => x.file_changes ?? []), own: recs.flatMap(x => x.own ?? []),
+    turns: all.map((t, i) => ({ turn: i + 1, status: t.status, stop_reason: t.stop_reason, thread_id: t.record?.thread_id ?? null, events: t.record?.events ?? 0 })) };
+  return { ...last, usage, record, test_relay: loop.relay };
+}
+
+/** How codex's tests run (L-404; relay.mjs, owner direction 2026-11-21): its own sandbox cannot start the verify jail, so
+ * it REQUESTS a test, the runner runs it in the verify jail on the review copy and returns the result for codex to judge. */
+export const CODEX_TEST_RELAY = "the codex transport's tests are relayed: codex requests an authorized test, the runner runs it in its verify jail on the review copy, and the result goes back to codex to judge (relay.mjs)";
 const DROP = { "codex-sdk": ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_ORG_ID", "OPENAI_PROJECT_ID"], "grok-cli": ["XAI_API_KEY", "GROK_API_KEY"], "agy-cli": ["GEMINI_API_KEY", "GOOGLE_API_KEY"] };
 const LANES = new URL("../config/lanes.json", import.meta.url);
 const exists = p => access(p).then(() => true, () => false);
@@ -112,8 +134,9 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
   const childEnv = scrub.env;
   const secrets = secretValues(env);
   const write_allowed = Boolean(permissions.write_test);
-  const harnessTemplate = await readFile(join(repoRoot, REVIEW_DIR, "HARNESS-cli.md"), "utf8").catch(() => null);
-  if (harnessTemplate === null) { err(`run-review: refused: ${REVIEW_DIR}/HARNESS-cli.md is missing\n`); return EXIT.refused; }
+  const reviewDir = opts.reviewDir ?? REVIEW_DIR;
+  const harnessTemplate = await readFile(join(repoRoot, reviewDir, "HARNESS-cli.md"), "utf8").catch(() => null);
+  if (harnessTemplate === null) { err(`run-review: refused: ${reviewDir}/HARNESS-cli.md is missing\n`); return EXIT.refused; }
 
   // The lane (agy only).
   let lane = null;
@@ -224,13 +247,14 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     }
     // L-404 (self-audit round 3, assignment 4 (sealed fe2a612)): the code under review runs ONLY in a verify jail. agy and
     // grok reach it through the review's launchers in the control dir (grok: allowed by --allow for exactly those paths,
-    // and a config.toml rule that could run it another way refuses the preflight); codex's own sandbox cannot start the
-    // jail, so codex runs no test at all (testsRefused) and the coverage gate says so.
-    const cmds = allowedCommands({ permissions, worktree: wt, telosRoot: opts.telosRoot, ...(transport === "agy-cli" || transport === "grok-cli" ? { launcherDir: control } : {}),
-      ...(transport === "codex-sdk" ? { testsRefused: CODEX_TESTS_REFUSED } : {}),
-      envPrefix: transport === "codex-sdk" ? `env NO_PROXY=${LOOPBACK_NO_PROXY} no_proxy=${LOOPBACK_NO_PROXY} ` : "" });
-    if (transport === "grok-cli" && !opts.dryRun) { await mkdir(control, { recursive: true }); cmds.launchers = writeReviewLaunchers({ control_dir: control, worktree: wt, run_command_policy: cmds.run_command_policy }); }
-    else if (transport === "grok-cli") cmds.launchers = {};
+    // and a config.toml rule that could run it another way refuses the preflight). Codex's own sandbox cannot start the
+    // jail, so its tests are RELAYED (relay.mjs, owner direction 2026-11-21): the same launchers, listed as commands codex
+    // may REQUEST; the runner decides each request as the agy hook would and runs it outside codex's sandbox.
+    const relayed = transport === "codex-sdk";
+    const cmds = allowedCommands({ permissions, worktree: wt, telosRoot: opts.telosRoot, ...(transport === "agy-cli" || transport === "grok-cli" || relayed ? { launcherDir: control } : {}) });
+    if (relayed) cmds.lines = relayLines({ lines: cmds.lines, commit: opts.commit });
+    if ((transport === "grok-cli" || relayed) && !opts.dryRun) { await mkdir(control, { recursive: true }); cmds.launchers = writeReviewLaunchers({ control_dir: control, worktree: wt, run_command_policy: cmds.run_command_policy }); }
+    else if (transport === "grok-cli" || relayed) cmds.launchers = {};
     const harness = renderHarness(harnessTemplate, { COMMIT: opts.commit, WORKTREE: wt, ALLOWED_COMMANDS: cmds.lines.join("\n"), WRITE_RULE: writeRule({ write_allowed, worktree: wt }),
       READ_RULE: readRule({ transport }), SANDBOX_NOTE: sandboxNote({ transport, scratchTmp: codexProfile?.scratch_tmp ?? null }), MAX_WALL_S: wall });
     // A continuation: agy and codex resume their own conversation (a note, then the same prompt); otherwise the same
@@ -243,12 +267,12 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     // ---- per transport: argv, sandbox, writable paths, preflight ------------------------------------------------
     const plan = {
       schema: SUB_PLAN_SCHEMA, dry_run: opts.dryRun, via: "subscription", transport,
-      assignment: { n: opts.n, title: row.title, file: `${REVIEW_DIR}/${row.file}`, scope: row.scope, testing: row.testing },
+      assignment: { n: opts.n, title: row.title, file: `${reviewDir}/${row.file}`, scope: row.scope, testing: row.testing },
       lab: row.lab, vendor: row.vendor, requested_model: row.model, ...(lane ? { lane } : {}), commit: opts.commit,
       default_reviewer: row.default_reviewer, reviewer_override: row.reviewer_override, ...(row.reviewer_override ? { reviewer: row.reviewer_spec } : {}),
       subscription_coverage: COVERAGE[transport],
       prompt: {
-        harness_cli_template: { path: `${REVIEW_DIR}/HARNESS-cli.md`, sha256: sha256(harnessTemplate) },
+        harness_cli_template: { path: `${reviewDir}/HARNESS-cli.md`, sha256: sha256(harnessTemplate) },
         harness_sha256: sha256(harness), brief_sha256: sha256(b.brief), readme_sha256: sha256(b.readme), assignment_sha256: sha256(b.assignmentText),
         sha256: sha256(prompt), bytes: Buffer.byteLength(prompt),
         ...(opts.dryRun ? { note: "computed with the dry run's stand-in worktree path; a real run's prompt names its own worktree and records its own sha256" } : {}),
@@ -294,9 +318,21 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       pre = await codexPreflight({ cli: launcher, env: childEnv, model: row.model, opts, sdk: plan.sdk, permissions: { overrides: codexProfile.overrides, expected_entries: codexProfile.expected_entries, cwd: wt } });
       if (outer.failed) { pre.ok = false; pre.failed.unshift(outer.failed); }
       if (outer.applied) pre.checks.outer_runtime = { applied: true, evidence: outer.evidence, note: "every preflight command above ran through the outer launcher, as the run will" };
+      plan.test_relay = { how: CODEX_TEST_RELAY, requests_heading: REQUESTS_HEADING, conclusions_heading: CONCLUSIONS_HEADING, max_rounds: MAX_RELAY_ROUNDS, max_tests: MAX_RELAY_TESTS,
+        decided_by: "jail-hook.mjs decideReviewCommand, against this review's run_command_policy", executed_by: RELAY_EXECUTED_BY, jail: RELAY_JAIL, launchers: { test: cmds.run_command_policy.launcher, suites: cmds.run_command_policy.suites } };
       runner = async () => {
         const Codex = deps.CodexSDK ?? (await import(CODEX_SDK_PACKAGE)).Codex;
-        return runCodexSdk({ Codex, sdkOptions, threadOptions, prompt, wall, resumeId, redactEnv: childEnv, ...(deps.codexAbortGraceMs ? { graceMs: deps.codexAbortGraceMs } : {}) });
+        const clock = deps.relayClock ?? (() => Date.now());
+        const deadline = clock() + wall * 1000;
+        const turn = (p, w, id) => runCodexSdk({ Codex, sdkOptions, threadOptions, prompt: p, wall: w, resumeId: id, redactEnv: childEnv, ...(deps.codexAbortGraceMs ? { graceMs: deps.codexAbortGraceMs } : {}) });
+        const first = await turn(prompt, wall, resumeId);
+        const threadId = first.record?.thread_id ?? null;
+        // Each turn after the first resumes codex's own thread with the results (the SDK's resumeThread: a new codex
+        // process on the same session, as --continue does).
+        const loop = await relayLoop({ first, nextTurn: (msg, { wallS }) => turn(msg, wallS, threadId), policy: { worktree: wt, control_dir: control }, rcp: cmds.run_command_policy,
+          commit: opts.commit, deadline, now: clock, env: childEnv, ...(deps.relayRun ? { run: deps.relayRun } : {}),
+          requestedBy: { transport, lab: row.lab, model: row.model, model_source: "the model the runner asked for (no codex event names the model that served)", thread_id: threadId } });
+        return mergeRelayedTurns(first, loop);
       };
     } else if (transport === "grok-cli") {
       const bw = deps.bwrap ?? "bwrap";
@@ -390,7 +426,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
     const tests_allowed = testsAllowedBy(permissions);
     // A continuation is one review across its runs: the earlier runs' coverage counts too (as the API runner's events do).
     const coverage = mergeCoverage(resume?.t?.coverage ?? null, transport === "agy-cli" ? coverageOfAgy(r.record ?? {}, { worktree: wt, tests_allowed })
-      : transport === "codex-sdk" ? coverageOfCodex(r.record ?? {}, { worktree: wt, tests_allowed, tests_refused: cmds.tests_refused ?? null })
+      : transport === "codex-sdk" ? coverageOfCodex(r.record ?? {}, { worktree: wt, tests_allowed, relay: r.test_relay ?? null })
         : coverageOfGrok(r.record ?? {}, { worktree: wt, control_dir: control, tests_allowed }));
     const gate = coverageGate(coverage);
     const gated = gatedStatus(r.status, r.stop_reason, gate);
@@ -406,7 +442,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       preflight: plan.preflight, limits: plan.limits, started_at: started.toISOString(), ended_at: ended.toISOString(),
       status, stop_reason: stopReason, ...(r.identity_mismatch ? { identity_mismatch: r.identity_mismatch } : {}), coverage, coverage_gate: gate, exit_code: r.exit_code ?? null, killed_for: r.killed_for ?? null, usage: r.usage ?? null, cli: r.record ?? {},
       worktree_check: { changed: check.changed, violations: check.violations, limits: check.limits }, worktree_kept: opts.keep ? wt : null,
-      review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}),
+      review_tests: reviewTests, ...(agyState ? { agy_state: agyState } : {}), ...(r.test_relay ? { test_relay: r.test_relay } : {}),
       ...(resume ? { continued_from: { transcript: resume.name, sha256: resume.sha256, method }, continued: method, ...(restored ? { restored_review_tests: restored.restored } : {}),
         cumulative: cumulative(resume.prior, { usage: r.usage ?? {}, wall_s: Math.round((ended - started) / 1000) }) } : {}),
     };
@@ -437,6 +473,7 @@ export async function subscriptionMain({ opts, a, repoRoot, env, deps, out, err,
       `- sandbox: ${sandboxLine(transport, plan)}`,
       ...(transport === "codex-sdk" ? [`- codex_outer_runtime: ${outerLine(plan.codex_outer_runtime)}`, `- scratch_tmpdir: \`${plan.scratch_tmp.path}\` (${plan.scratch_tmp.bytes} bytes; at most ${plan.scratch_tmp.max_bytes} so the tests' Unix sockets fit ${plan.scratch_tmp.unix_socket_path_max} bytes)`] : []),
       ...(transport === "grok-cli" ? [`- grok_permissions: ${grokPermissionsLine(pre.checks?.permissions, pre.checks?.permissions_inspect)}`] : []),
+      ...(r.test_relay ? [`- test_relay: ${relayLine(r.test_relay)}`] : []),
       `- review_copy: ${reviewCopyLine(plan.review_copy)}`,
       `- policy_violations: ${check.violations.length ? check.violations.map(v => `\`${v}\``).join(", ") : "none"}`,
       `- commit: \`${opts.commit}\``,
