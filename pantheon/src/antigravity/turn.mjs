@@ -339,7 +339,14 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   const tool_log = [], examined = [];
   let dropped_decisions = 0;
   const record = { transport: SDK_TRANSPORT, requested_model: model, effort, subagents: null, gateway: null, tool_log, usage: null, runtime: null, sandbox: null, launch: null, availability: [] };
+  // HOW FAR THE SESSION GOT (#114), each from its own raw observation, never inferred from intent: "prepared" (the sandbox
+  // decision is recorded), "spawn_attempted" (the launch is recorded; spawn follows it), "runtime_observed" (the bridge
+  // reported its runtime). "none": nothing was prepared. A launch is intent: it is not evidence of containment at runtime.
+  const phaseOf = () => (record.runtime ? "runtime_observed" : record.launch ? "spawn_attempted" : record.sandbox ? "prepared" : "none");
+  // A failure carries the safe receipts recorded up to it: the sandbox decision and the launch intent (argv with the
+  // gateway token redacted, environment NAMES only, cwd, gateway url), as a success does.
   const carry = e => Object.assign(e, { subagents: record.subagents, gateway: record.gateway, tool_log: record.tool_log, usage: record.usage, runtime: record.runtime, availability: record.availability, transport: SDK_TRANSPORT,
+    sandbox: record.sandbox, launch: record.launch, evidence_phase: phaseOf(),
     ...(research ? { examined } : {}) });
 
   // ---- the jail, before anything is spent
@@ -347,7 +354,7 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
   if (box.enabled) {
     const probe = await sandboxAvailable(box.bwrap);
     if (!probe.ok) {
-      if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", `the implementer session is not started unjailed: bwrap is not usable here (${probe.why})`);
+      if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", `the implementer session is not started unjailed: bwrap is not usable here (${probe.why})`, { sandbox: null, launch: null, evidence_phase: "none" });
       sandboxRecord = { enabled: false, why: `bwrap is not usable (${probe.why}); the caller allowed an unsandboxed session` };
     } else {
       const keep = [process.execPath, resolve(HERE, ".."), ...pythonRoots(python), real(dirname(bridge))];
@@ -389,13 +396,13 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
         let st; try { st = statSync(h); } catch { continue; }
         // Placed right after the repository's bind, before whatever ends the option list.
         const w = argvPrefix.findIndex((x, i) => (x === "--ro-bind" || x === "--bind") && argvPrefix[i + 2] === paths.worktree);
-        if (w < 0) throw fail("SANDBOX_UNAVAILABLE", "the research session is not started: the jail has no bind of the repository to hide the controller's paths under");
+        if (w < 0) throw fail("SANDBOX_UNAVAILABLE", "the research session is not started: the jail has no bind of the repository to hide the controller's paths under", { sandbox: null, launch: null, evidence_phase: "none" });
         argvPrefix.splice(w + 3, 0, ...(st.isDirectory() ? ["--tmpfs", h] : ["--ro-bind", "/dev/null", h]));
         researchHidden.push(h);
       }
       sandboxRecord = { enabled: true, bwrap: box.bwrap, binds: jail.binds, hidden_control_dirs: jail.hidden, home_dirs_hidden: hidden, ...(kept.length ? { home_paths_kept: kept } : {}), ...(researchHidden.length ? { research_hidden: researchHidden } : {}), network: "shared with the host: the runtime reaches the controller's loopback gateway; it holds no credential" };
     }
-  } else if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", "the implementer session is not started unjailed (sandbox.enabled is false and allowUnsandboxed is not set)");
+  } else if (!box.allowUnsandboxed) throw fail("SANDBOX_UNAVAILABLE", "the implementer session is not started unjailed (sandbox.enabled is false and allowUnsandboxed is not set)", { sandbox: null, launch: null, evidence_phase: "none" });
   record.sandbox = sandboxRecord;
 
   // ---- the gateway: the key stays here
@@ -545,7 +552,7 @@ export async function runAntigravitySdkTurn({ seat, prompt, worktree, control_di
       served_model: names[0], served_model_source: "provider",
       transport: SDK_TRANSPORT, requested_model: model, effort, conversation_id: final.conversation_id ?? record.conversation_id ?? null, tool_calls: final.tool_calls ?? tool_log.length,
       subagents: record.subagents, usage: record.usage, trajectory_usages: final.trajectory_usages ?? null, gateway: g, availability: record.availability, tool_log, ...(record.tool_log_dropped ? { tool_log_dropped: record.tool_log_dropped } : {}),
-      capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, duration_s: final.duration_s ?? null,
+      capabilities: final.capabilities ?? record.capabilities ?? null, runtime: record.runtime, sandbox: record.sandbox, launch: record.launch, evidence_phase: phaseOf(), duration_s: final.duration_s ?? null,
       ...(research ? { examined } : {}) };
   }
 }
