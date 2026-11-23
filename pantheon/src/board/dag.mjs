@@ -122,7 +122,7 @@ export function entriesOfKind(store, commitCid, kind, opts = {}) {
  * `entries` is a list of { kind, payload, links, visibility, blob } built in caller order; a `blob`
  * is put first and its cid injected as the kind's content link.
  */
-export async function publish({ store, refs, runtime = null, ref, author, entries, lease = null, msg = "", budgetCheck = true, expect = undefined }) {
+export async function publish({ store, refs, runtime = null, ref, author, entries, lease = null, leases = [], msg = "", budgetCheck = true, expect = undefined }) {
   const steps = [];
   const note = (step, detail) => { steps.push({ step, ...detail }); };
 
@@ -199,7 +199,8 @@ export async function publish({ store, refs, runtime = null, ref, author, entrie
   // The lease fence -- both halves, direct slots and artifact slots covered by a leased item -- runs in
   // refs.swap, which diffs the commits itself; a refusal from there comes back through the swap below.
   const changed = changedSlots(store, before, commit);
-  const swap = await refs.swap({ name: ref, expected: before, next: commit, author, lease, changedSlots: changed, msg });  // step 6
+  // `leases`: further leases the write depends on, verified inside the ref lock with the primary one (#121).
+  const swap = await refs.swap({ name: ref, expected: before, next: commit, author, lease, leases, changedSlots: changed, msg });  // step 6
   if (!swap.ok) return { ok: false, ...swap, commit, written, changed, steps };                                            // step 7
 
   if (runtime) {
