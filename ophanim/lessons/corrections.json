@@ -79,6 +79,12 @@
           "note": "the qualification report said items 6, 7 and 8 of the research specification's verification list passed. Each passed its own tests and a mutation; each failed a reproduction the tests did not take (limits passed by a caller, a resumed team, a member citing another's source). 'Pass' was written for a property where only one path to it had been shown",
           "corrected_by": "integrator",
           "recurrence_check": "none yet: a report row still rests on whoever writes it; the register's L-737 and the corrected report record the case"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-21",
+          "ref": "52bd1ee (PR #76); request docs/superpowers/plans/2026-11-21-foundry-fixes/fix-2-keep-measuring.md (5ccc7e0)",
+          "note": "the foundry's next run records 'the best setup measured so far for this class of task' while every trial is synthetic and sufficient is false. The winner followed an injected 1,200 ms delay (moved to the other model, the win moved with it), and with no delay it flipped across three runs on 13-67 ms of process timing. the owner's recursive lesson on PR #76 (OPHANIM Foundry) asked it as an open question; the coordinator confirmed it by running the code at 52bd1ee with stand-in transports, nothing reaching a provider; the owner chose 'keep measuring' while the history is insufficient. Not yet corrected: an OPHANIM item is requested"
         }
       ],
       "fixed_in": "62e54e8 (automatic path only; the general write-side refusal is the owner's candidate a5f9c4e/b6b5cd0, not public)",
@@ -510,6 +516,24 @@
           "note": "bounds reported as enforced held only on the path the tests took: a caller's limits raised the active ceiling above the coordinator model's (20 members under Carbon); the team's request bound restarted at each resume; after a refused charge the pool started every waiting specialist; gap research re-activated without bound; a research session could read the controller's private key with the default scope; the real key followed an upstream redirect",
           "corrected_by": "integrator",
           "recurrence_check": "pantheon/tests/research-team.test.mjs, pantheon/tests/antigravity-turn.test.mjs, ophanim/operate/research.test.mjs, ophanim/operate/research-lifecycle.test.mjs, pantheon/tests/antigravity-gateway.test.mjs; mutation RV5 of ophanim/operate/sdk-intake.mutate.mjs and RV1 to RV29 with it"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-21",
+          "ref": "52bd1ee (PR #76, on ophanim/dependency-graph); request docs/superpowers/plans/2026-11-21-foundry-fixes/fix-1-shared-cap.md (5ccc7e0)",
+          "note": "the foundry's 'ONE meter for the whole run ... a turn is refused once the meter reaches it' held on the easy path only: each transport's provider is built once with a snapshot of the remainder and checks its own spend, and the one test of it builds its second transport after the spend, when the snapshot is current. A reused Claude-CLI client was granted $0.50 with $0.10 left and sent again past the cap: $1.70 spent of $1. the owner's recursive lesson on PR #76 (OPHANIM Foundry) asked it as an open question; the coordinator confirmed it by running the code at 52bd1ee with stand-in transports, nothing reaching a provider. Not yet corrected: an OPHANIM item is requested"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-21",
+          "ref": "52bd1ee (PR #76); request docs/superpowers/plans/2026-11-21-foundry-fixes/fix-3-unknown-served-model.md (5ccc7e0)",
+          "note": "'never count a trial whose served model differs from the one asked for' held on the explicit-mismatch path, which has a control; a served model that is not known took another path: the CLI adapter replies model: served ?? requested, the pipeline records that as served_model, and the trial was ranked and won as the model asked for. the owner's recursive lesson on PR #76 (OPHANIM Foundry) asked it as an open question; the coordinator confirmed it by running the code at 52bd1ee with stand-in transports, nothing reaching a provider. Not yet corrected: an OPHANIM item is requested"
+        },
+        {
+          "observed_by": "owner",
+          "date": "2026-11-21",
+          "ref": "52bd1ee (PR #76); request docs/superpowers/plans/2026-11-21-foundry-fixes/fix-4-day-tape-partition.md (5ccc7e0)",
+          "note": "the day tape's six blocks were checked by counts and sizes, never joined: blocks() takes floor(13387 / 6) = 2231 per block, so the last trade (index 13386) is in neither the acceptance nor the operation, and a partition that repeated one trade and dropped another would pass the same counts. the owner's recursive lesson on PR #76 (OPHANIM Foundry) asked it as an open question; the coordinator confirmed it by running the code at 52bd1ee with stand-in transports, nothing reaching a provider. Not yet corrected: an OPHANIM item is requested"
         }
       ],
       "fixed_in": "this commit (containment on the real target; views with byte ranges per version; a continuation on every cut; budgets enforced in bytes before delivery)",
@@ -808,6 +832,53 @@
         "kind": "none",
         "why": "reporting conduct; nothing executable compares a report's figures with the run records",
         "next": "before a report is sent, re-derive each figure in it with a command whose output is in the same session's record, and name the commit each result was measured on; say so where a figure is recalled and not re-derived. Evidence so far is one run"
+      }
+    },
+    {
+      "id": "environment-refusal-charged-to-work",
+      "class": "A refusal by the environment the work runs in (a provider refusing the account: no credit, a key it does not accept, an exhausted quota or spend cap) is read as a failure of the work item, so the item's attempt bounds are spent on a condition no attempt can change, and the run goes on to send the next item into the same refusal.",
+      "source": "self-observed 2026-11-21 in a live run of the five plan-gate items; the owner then asked for the stop: \"in order to have those there needs to be a stop somewhere\"",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-21",
+          "ref": "the run's work ledger (four plan records); register KG-39; fix 8acea7a (PR #84)",
+          "corrected_by": "integrator",
+          "note": "every planner call came back from Anthropic as 400 'Your credit balance is too low to access the Anthropic API'. The plan stage read it as a malformed answer, asked the planner twice more and recorded the plan failed, one of its three attempts; the scheduler then dispatched the next item into the same refusal. Four items were dispatched before the coordinator stopped the run by hand; no provider call was charged (the refused requests were token counts). The stop: a refusal of the account is pending on an owner blocker, uses no attempt, and stops the tick"
+        }
+      ],
+      "fixed_in": "8acea7a (PR #84)",
+      "detector": {
+        "kind": "test",
+        "file": "ophanim/operate/account-refusal.test.mjs",
+        "name": "ACCOUNT REFUSAL"
+      }
+    },
+    {
+      "id": "verification-not-of-the-gated-tree",
+      "class": "Local verification is taken in conditions other than the gate's (a runtime other than the repository's engines, or a tree that changed while the suite ran), so its result does not describe the commit the gate will judge, whether it reads green or red.",
+      "source": "self-observed 2026-11-21 while verifying PR #84",
+      "instances": [
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-21",
+          "ref": "PR #84 (8acea7a)",
+          "corrected_by": "integrator",
+          "note": "the new tests, the mutation runner and the first full-suite runs were made on Node 22 while package.json's engines require Node >=24 <25 and CI pins 24.22.1. Under Node 22 the test runner prints TAP, not the spec output the runner parses, and the mutation runner's baseline read NaN; that is how it was seen. Every result was taken again on Node 24 before the commit, and the pull request states the runtime"
+        },
+        {
+          "observed_by": "mechanism",
+          "date": "2026-11-21",
+          "ref": "PR #84 (8acea7a)",
+          "corrected_by": "integrator",
+          "note": "scheduler.mjs was edited (one argument moved, to keep a billing runner's mutation target) while npm run test:proof was running, so that run's extract.test.mjs cell read the runners in a half-changed tree and failed. Traced to the edit, the cell passed on the committed head, and the pull request reports the failure and why"
+        }
+      ],
+      "fixed_in": null,
+      "detector": {
+        "kind": "none",
+        "why": "session conduct: no gate checks the runtime a local verification ran on, or that the tree held still while it ran",
+        "next": "verify on the repository's engines runtime and only on a tree that does not change during the run, and confirm a surprising result on the committed head before reporting it. A preflight that refuses to run the suites outside engines is a candidate check. Evidence so far is one session"
       }
     }
   ]

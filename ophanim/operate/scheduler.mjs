@@ -24,6 +24,7 @@ import {reconcile} from './reconcile.mjs';
 import {createLane, isRound} from './self-repair.mjs';
 import {recoverEvidence, bundlesOf, sourcesDigest} from './evidence-recovery.mjs';
 import {digest} from '../../packages/ledger/canonical.mjs';
+import {accountRefusal, ACCOUNT_REFUSED, REMEDY} from './account-refusal.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -138,7 +139,7 @@ export function inputSignature({repo, statusRoot, workRoot, issues = null, bundl
 // claim in flight is announced on `progress` ({event: 'dispatch', claim, lease_until}), so a launcher whose executor does
 // not return can release it itself (releaseInterrupted). Fencing is unchanged: a released claim records and charges nothing.
 // THE STOP IS STRUCTURED (L-308): `stopped` (text, as before) is accompanied by `stop` {code, why}, code one of STOP_CODES.
-export const STOP_CODES = Object.freeze({ITERATIONS: 'ITERATIONS_LIMIT', ELAPSED: 'ELAPSED_LIMIT', BUDGET: 'PROVIDER_CALL_BUDGET', STAGE_ELAPSED: 'STAGE_ELAPSED', INTERRUPTED: 'INTERRUPTED'});
+export const STOP_CODES = Object.freeze({ITERATIONS: 'ITERATIONS_LIMIT', ELAPSED: 'ELAPSED_LIMIT', BUDGET: 'PROVIDER_CALL_BUDGET', STAGE_ELAPSED: 'STAGE_ELAPSED', INTERRUPTED: 'INTERRUPTED', ACCOUNT: ACCOUNT_REFUSED});
 
 // ---- THE GEMINI BILLING POLICY OF A TICK (register L-136; pantheon/src/route/gemini-billing.mjs, docs/billing-policy.md) ----
 // `billing` (tick, watch) is the RESOLVED policy the launcher declared (cli.mjs flags, service.mjs config, live-run.mjs
@@ -311,6 +312,8 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
   const runItem = async item => {
     let collided = null;
     for (;;) {
+      // A provider refused the account (register KG-39): nothing more is dispatched in this tick, this item or another.
+      if (log.stop?.code === STOP_CODES.ACCOUNT) return;
       if (interrupt?.aborted) { stopWith(STOP_CODES.INTERRUPTED, `interrupted: ${interrupt.reason?.message ?? 'the launcher was stopped'}`); return; }
       if (iterations >= L.iterations) { stopWith(STOP_CODES.ITERATIONS, `iterations limit ${L.iterations} reached`); return; }
       if (clock() - started > L.elapsed_ms) { stopWith(STOP_CODES.ELAPSED, `elapsed limit ${L.elapsed_ms} ms reached`); return; }
@@ -325,7 +328,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const same = work.stages(item).filter(s => s.stage === gate.gate && sameAttempt(s.inputs, inputs));
       // An attempt the billing policy refused under OTHER settings of the refused kind does not count against the bound
       // of the policy now in force (the owner changed it); one refused under the same settings does.
-      const attempts = same.filter(s => !billingChanged(s.blocker, billing)).length;
+      // A stage pending on a refusal of the ACCOUNT (register KG-39) is not an attempt of the item's work either: the
+      // provider refused the account, not this attempt, and the item is retried until the owner restores it.
+      const attempts = same.filter(s => !billingChanged(s.blocker, billing) && s.blocker?.code !== ACCOUNT_REFUSED).length;
       if (attempts >= L.stage_attempts) {
         log.blocked.push({item, gate: gate.gate, blocker: {what: `${attempts} attempts of ${gate.gate} on the same inputs`, role: 'lead@orch', resume_when: 'an input changes, or the owner raises the retry limit'}});
         return;
@@ -382,6 +387,10 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const onInterrupt = () => ac.abort(Object.assign(new Error(`INTERRUPTED: ${interrupt.reason?.message ?? 'the launcher was stopped'}`), {code: 'INTERRUPTED'}));
       if (interrupt?.aborted) onInterrupt(); else interrupt?.addEventListener('abort', onInterrupt, {once: true});
       let charged = 0, refusedCharges = 0;
+      // THE ACCOUNT (register KG-39): a refusal of the account a stage's calls are made on, reported by its meter
+      // (stages.mjs, ctx.accountRefused) or read from the error an executor threw; one per vendor.
+      const refusals = [];
+      const accountRefused = a => { if (a?.code === ACCOUNT_REFUSED && !refusals.some(x => x.vendor === a.vendor)) refusals.push(a); };
       const charge = (n = 1) => {
         if (!(Number.isInteger(n) && n >= 1)) fail('charge(n): n is a positive integer', 'USAGE');
         const why = ac.signal.aborted ? ac.signal.reason.message
@@ -399,8 +408,9 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
       const stageBilling = geminiBilling({policy: billing, ledger: workBillingLedger(work, claim, clock)});
       // A round's stage is handed its round (ctx.selfRepair: defect, base, line, paths); other items' contexts are as before.
       try { result = await exec({item, gate, upstream, attempt, budget, repo, work, reuse: gate.reuse ?? {}, issues, bundlesDir, charge, fence, signal: ac.signal, ...(loop ? {graph: loop.executor()} : {}),
-        ...(round ? {selfRepair: round} : {}), claim, billing: stageBilling}); }
+        ...(round ? {selfRepair: round} : {}), accountRefused, claim, billing: stageBilling}); }
       catch (e) {
+        accountRefused(accountRefusal(e));
         // THE ACTUAL SPEND (self-audit round 3, assignment 3 (sealed bb1287a), L-302): every provider call is charged on the
         // work ledger before it is made (the executor contract above), so `charged` IS what this attempt spent, 0 included;
         // an executor that reports more (e.provider_calls) is believed. Unknown (null, then counted at the claim's whole
@@ -453,6 +463,19 @@ export async function tick({repo, statusRoot, workRoot, issues = null, bundlesDi
             blocker: {code: 'STAGE_ELAPSED', transient: true, what: why, role: 'lead@orch', resume_when: 'the stage is retried, within its attempt bound, by a tick with elapsed budget left'}};
         }
         stopWith(STOP_CODES.STAGE_ELAPSED, `stage elapsed limit ${budget.elapsed_ms} ms reached (${item} ${gate.gate})`);
+      }
+      // THE ACCOUNT, RECORDED (register KG-39). A stage that did not pass while a provider refused the account its calls
+      // are made on is PENDING on that refusal: a transient owner blocker naming the provider and what to fix, retried
+      // when due and counted against no attempt bound. The result it reported is kept beside it. The tick stops: every
+      // stage that seats that provider would be refused the same way.
+      if (!stopped && refusals.length && result.status !== 'passed') {
+        const a = refusals[0];
+        const why = `${ACCOUNT_REFUSED}: ${a.vendor ?? 'a provider'} refused the account (${a.kind}, ${a.status}: ${a.why}); the ${gate.gate} stage reported ${result.status} under it and waits, using none of its attempts`;
+        result = {...result, status: 'pending', next: {stage: gate.gate, why: why.slice(0, 300)},
+          outputs: {...(result.outputs ?? {}), account_refused: {refusals, status_reported: result.status, ...(result.blocker ? {blocker_reported: result.blocker} : {})}},
+          blocker: {code: ACCOUNT_REFUSED, transient: true, account: {vendor: a.vendor, model: a.model, kind: a.kind, status: a.status}, what: why.slice(0, 600), role: 'decision-authority',
+            resume_when: `the owner restores the ${a.vendor ?? 'provider'} account (${REMEDY[a.kind]}); the stage is retried when due, and a refusal of the account counts against no attempt bound`}};
+        stopWith(STOP_CODES.ACCOUNT, `${why.slice(0, 400)} -- the tick stops: every stage seating ${a.vendor ?? 'that provider'} would be refused the same way`);
       }
       const identity = {item, requirement: 'sha256:' + digest({item: gate.requirement.item, title: gate.requirement.title, basis: gate.requirement.basis}),
         ...(result.identity?.ticket ?? upstream?.identity.ticket ? {ticket: result.identity?.ticket ?? upstream.identity.ticket} : {})};
