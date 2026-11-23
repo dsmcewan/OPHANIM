@@ -109,6 +109,9 @@ export const DEFAULT_CONFIG = Object.freeze({
     stress: Object.freeze(['node', 'scripts/test-gates/stress.mjs', '--files', '{files}', '--repeat', '{rounds}', '--json', '{json}', '--no-self-repair-records']),
     pentest: Object.freeze(['node', 'scripts/pentest/run.mjs']),
     rounds: 5, nice: 10, timeout_ms: 90 * 60_000,
+    // An INCOMPLETE inspection of the head (a step whose report or process evidence is missing) is retried, after
+    // first_ms, doubling per attempt, at most max_ms apart. Each attempt's steps are bounded by timeout_ms.
+    retry: Object.freeze({first_ms: 15 * 60_000, max_ms: 6 * 60 * 60_000}),
   }),
   jail: true, timeout_ms: 30 * 60_000, checkout_root: null,
 });
@@ -270,10 +273,26 @@ export function feedRecord({repo, kind, record, env = process.env, dir = null}) 
 // ---- Detect (decision 3) ---------------------------------------------------------------------------------------------
 const testDefect = ({file, name, kind, evidence, reproduction}) => ({id: `test:${file}::${name ?? '*'}`, kind, rank: RANK[kind], title: `${kind === 'flake' ? 'flaky' : 'failing'} test ${name ?? '(the file)'} in ${file}`,
   site: [file], keys: [file], reproduction, evidence});
+/**
+ * A gate record's suite rows that Detect can read, and why each other row is skipped (a partial or malformed historical
+ * record: a row that is not an object, or whose notes or problems are not lists of text). A readable row's findings are
+ * used whatever its neighbours are.
+ */
+export function gateRows(rec) {
+  const results = rec?.record?.results, rows = [], skipped = [];
+  if (!Array.isArray(results)) return {rows, skipped: results === undefined ? [] : ['results is not a list']};
+  const texts = v => v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'));
+  results.forEach((r, i) => {
+    if (r === null || typeof r !== 'object' || Array.isArray(r)) skipped.push(`results[${i}] is not a suite row`);
+    else if (!texts(r.notes) || !texts(r.problems)) skipped.push(`results[${i}] (${typeof r.suite === 'string' ? r.suite : 'no suite'}): its notes or problems are not lists of text`);
+    else rows.push(r);
+  });
+  return {rows, skipped};
+}
 /** The failing tests a gate record names (check.mjs: per-suite notes `fail: NAME at FILE:LINE -- ...` and its problems). */
 export function gateDefects(rec) {
   const out = [], seen = new Set();
-  for (const r of rec.record?.results ?? []) {
+  for (const r of gateRows(rec).rows) {
     for (const note of r.notes ?? []) {
       const m = /^(fail|cancelled): (.+) at ([^\s]+?):(\d+|\?) -- /.exec(note);
       if (!m || WITHHELD.test(m[3])) continue;
@@ -357,7 +376,10 @@ export function detect({repo, commit, records, register = REGISTER}) {
   const defects = [], ignored = [...(records.unreadable ?? []).map(u => ({source: u.file, why: u.why}))];
   const gate = records.gate.at(-1) ?? null;
   if (gate && gate.commit !== commit) ignored.push({source: gate.file, why: `the latest gate record names ${gate.commit.slice(0, 12)}, not the commit under repair ${String(commit).slice(0, 12)}: not used`});
-  else if (gate) defects.push(...gateDefects(gate));
+  else if (gate) {
+    defects.push(...gateDefects(gate));
+    for (const why of gateRows(gate).skipped) ignored.push({source: gate.file, why: `a gate row is not readable: ${why}`});
+  }
   for (const s of records.stress) defects.push(...stressDefects(s, commit));
   let reg = [];
   try { reg = registerDefects(repo, commit, {register}); } catch (e) { ignored.push({source: register, why: `the register could not be read at ${String(commit).slice(0, 12)}: ${cut(e.message, 200)}`}); }
@@ -765,8 +787,17 @@ export function writeLessonCandidate(stateDir, {defect, recurrence, lane}) {
 // test files changed since the last inspection, and the pentest, on a clean checkout of the line head, in a background
 // process beside the tickets (self-repair-inspect.mjs). Each writes a record naming that commit, so the NEXT round's
 // Detect sees whatever they found and repairs it. It runs the outer wheels and never edits them. A commit is inspected
-// once: a new inspection starts when the line moves (inspecting identical code again adds nothing), and one runs at a
-// time. Its state is under <stateDir>/self-repair/inspection/ (git-ignored): running.json while one runs, last.json after.
+// once COMPLETELY: a new inspection starts when the line moves (inspecting identical code again adds nothing), and one
+// runs at a time. Its state is under <stateDir>/self-repair/inspection/ (git-ignored): running.json while one runs,
+// last.json after each attempt, complete.json after the last COMPLETE one.
+//
+// COMPLETE is derived, never taken from a flag: every required step (the gate run; the stress run unless it was
+// skipped for a stated reason; the pentest) finished on its own (an exit code, not killed) and left a report of its kind
+// in the records directory, naming the inspected commit (inspectionCompleteness). A gate run whose tests FAIL is
+// complete: its findings are the point. An attempt that is not complete (a tool that wrote no report, a timeout, a
+// checkout that failed, an inspector that died) is retried when due (config.inspect.retry), and the comparison base of
+// the stress run stays the last COMPLETE commit. A last.json written before this rule (no attempt field) is judged by
+// the same evidence: what it cannot establish is incomplete, so that commit is inspected again.
 export const INSPECTION_SCHEMA = 'ophanim.self-repair.inspection/v1';
 export const inspectionDirOf = state => path.join(state, 'self-repair', 'inspection');
 const readJsonOr = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -777,7 +808,79 @@ export const writeJsonAtomic = (f, v) => {
   fs.renameSync(t, f);
 };
 const alive = pid => { if (!Number.isInteger(pid) || pid <= 0) return false; try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
-export const inspectionState = state => ({running: readJsonOr(path.join(inspectionDirOf(state), 'running.json')), last: readJsonOr(path.join(inspectionDirOf(state), 'last.json'))});
+export const inspectionState = state => ({running: readJsonOr(path.join(inspectionDirOf(state), 'running.json')), last: readJsonOr(path.join(inspectionDirOf(state), 'last.json')),
+  complete: readJsonOr(path.join(inspectionDirOf(state), 'complete.json'))});
+const REPORT_VERDICTS = Object.freeze(['PASS', 'FAIL', 'UNVERIFIED']);
+// The exit codes the tools give each verdict (scripts/test-gates/check.mjs: PASS 0, FAIL 1, UNVERIFIED 2, or 0 when
+// unverified is allowed; stress.mjs: PASS 0, FAIL 1, otherwise 2). A report whose verdict the exit contradicts is not
+// the tool's finished answer.
+const VERDICT_EXITS = Object.freeze({gate: {PASS: [0], FAIL: [1], UNVERIFIED: [2, 0]}, stress: {PASS: [0], FAIL: [1], UNVERIFIED: [2]}});
+const isRow = r => r !== null && typeof r === 'object' && !Array.isArray(r);
+const isTexts = v => v === undefined || (Array.isArray(v) && v.every(x => typeof x === 'string'));
+/**
+ * Why a report body is not a finished report of its kind, or null. With `exit` (the tool's exit code), the verdict must
+ * be the one that exit gives. A gate report has at least one usable suite row (a suite name, a verdict, notes and
+ * problems as lists of text) and no row that is not; a stress report's byTest rows name a file and their rounds.
+ */
+export function reportRefusal(kind, body, exit = null) {
+  const exitBad = () => (exit !== null && !(VERDICT_EXITS[kind][body.verdict] ?? []).includes(exit) ? `the ${body.verdict} report came with exit ${exit}` : null);
+  if (kind === 'gate') {
+    if (body?.schema !== 'ophanim.test-gate/v2' || !REPORT_VERDICTS.includes(body.verdict) || !Array.isArray(body.results)) return 'not a finished test-gate/v2 report (schema, verdict, results)';
+    if (!body.results.length) return 'the gate report has no suite results';
+    const bad = body.results.findIndex(r => !isRow(r) || typeof r.suite !== 'string' || !r.suite || !REPORT_VERDICTS.includes(r.verdict) || !isTexts(r.notes) || !isTexts(r.problems));
+    if (bad >= 0) return `the gate report's results[${bad}] is not a usable suite row`;
+    if (body.results.every(r => r.suite === '(none)')) return 'the gate report ran no suite';
+    if (body.verdict === 'PASS' && body.results.some(r => r.verdict !== 'PASS')) return 'the gate report says PASS over a suite that did not pass';
+    if (body.verdict !== 'FAIL' && body.results.some(r => r.verdict === 'FAIL')) return `the gate report says ${body.verdict} over a failing suite`;
+    return exitBad();
+  }
+  if (kind === 'stress') {
+    if (body?.schema !== 'ophanim.toolkit.stress/v1' || !REPORT_VERDICTS.includes(body.verdict) || !Array.isArray(body.byTest)) return 'not a finished toolkit.stress/v1 report (schema, verdict, byTest)';
+    if (!Number.isInteger(body.repeat) || body.repeat < 1) return 'the stress report names no round count';
+    const bad = body.byTest.findIndex(t => !isRow(t) || typeof t.file !== 'string' || !t.file || !Array.isArray(t.rounds) || !t.rounds.every(n => Number.isInteger(n)));
+    if (bad >= 0) return `the stress report's byTest[${bad}] is not a usable row`;
+    return exitBad();
+  }
+  if (kind === 'pentest') {
+    const text = typeof body?.report === 'string' ? body.report : '';
+    if (!text.includes('--- summary ---')) return 'the pentest report has no summary';
+    const end = /\n(OK|FAIL): [^\n]*\s*$/.exec(text)?.[1] ?? null;
+    if (!end) return 'the pentest report has no final OK or FAIL line';
+    if (exit !== null && (end === 'OK') !== (exit === 0)) return `the pentest report ends ${end} but the run exited ${exit}`;
+    return null;
+  }
+  return `no report kind ${kind}`;
+}
+const STEP_KIND = Object.freeze({gates: 'gate', stress: 'stress', pentest: 'pentest'});
+/**
+ * Was an inspection attempt (a last.json or complete.json body) COMPLETE, by its evidence? {complete, why: [...]}.
+ * Each required step: an exit code, not killed, and a report of its kind in `records` naming the attempt's commit; the
+ * stress step may instead be skipped. Anything else (a missing step, an error, an unreadable report) is incomplete.
+ */
+export function inspectionCompleteness(attempt, records) {
+  if (!attempt || typeof attempt !== 'object') return {complete: false, why: ['no inspection attempt is recorded']};
+  if (!SHA.test(attempt.commit ?? '')) return {complete: false, why: ['the attempt names no full commit']};
+  const steps = Array.isArray(attempt.steps) ? attempt.steps : [], why = [];
+  for (const s of steps) if (s?.name === 'inspection' && s.error) why.push(`the inspection stopped: ${cut(s.error, 200)}`);
+  for (const [name, kind] of Object.entries(STEP_KIND)) {
+    const at = steps.filter(s => s?.name === name);
+    if (at.length !== 1) { why.push(at.length ? `${name}: recorded ${at.length} times` : `${name}: no result`); continue; }
+    const s = at[0];
+    if (name === 'stress' && typeof s.skipped === 'string' && s.skipped) continue;
+    if (s.error) { why.push(`${name}: ${cut(s.error, 200)}`); continue; }
+    if (!Number.isInteger(s.exit) || s.killed) { why.push(`${name}: the run did not finish on its own (exit ${s.exit ?? 'none'}${s.killed ? `, killed: ${s.killed}` : ''})`); continue; }
+    if (typeof s.record !== 'string' || !s.record || !records) { why.push(`${name}: no report is named`); continue; }
+    const f = path.resolve(records, s.record);
+    if (path.relative(path.resolve(records), f).startsWith('..')) { why.push(`${name}: the report is outside the records`); continue; }
+    const r = readJsonOr(f);
+    if (r?.schema !== RECORD_SCHEMA || r.kind !== kind || r.commit !== attempt.commit) { why.push(`${name}: the report ${s.record} is absent or is not a ${kind} record of ${attempt.commit.slice(0, 12)}`); continue; }
+    const bad = reportRefusal(kind, r.record, s.exit);
+    if (bad) why.push(`${name}: ${bad}`);
+  }
+  return {complete: why.length === 0, why};
+}
+/** The delay before attempt `n + 1` of an incomplete inspection. */
+export const inspectionRetryMs = (n, retry = DEFAULT_CONFIG.inspect.retry) => Math.min(retry.max_ms, retry.first_ms * 2 ** Math.max(0, n - 1));
 const INSPECTOR = path.join(path.dirname(new URL(import.meta.url).pathname), 'self-repair-inspect.mjs');
 /** Start the inspector as a detached background process (its output in inspection.log); returns its pid. */
 export function spawnInspection(plan, {state}) {
@@ -792,18 +895,54 @@ export function spawnInspection(plan, {state}) {
     return child.pid;
   } finally { fs.closeSync(fd); }
 }
-/** The idle lane's decision: running, already inspected, skipped (nothing to inspect with), or started. Never throws. */
+/**
+ * An inspector that is gone without its result (running.json names a dead pid): its attempt is recorded in last.json as
+ * interrupted (incomplete), unless it did write that attempt's result, and running.json is removed. Returns what it did.
+ */
+function recoverInspection(state, running, last, at) {
+  const d = inspectionDirOf(state);
+  const finished = last?.commit === running.commit && last?.started_at === running.started_at;
+  const out = {pid: running.pid ?? null, commit: running.commit ?? null, started_at: running.started_at ?? null, result: finished ? 'its result was written' : 'interrupted'};
+  let wrote = last;
+  if (!finished && SHA.test(running.commit ?? '')) {
+    wrote = {schema: INSPECTION_SCHEMA, commit: running.commit, since: running.since ?? null, attempt: Number.isInteger(running.attempt) ? running.attempt : 1, started_at: running.started_at ?? null,
+      finished_at: null, recovered_at: at, steps: [{name: 'inspection', error: `interrupted: the inspector (pid ${running.pid ?? 'unknown'}) ended without writing its result`}]};
+    wrote.complete = false; wrote.incomplete = inspectionCompleteness(wrote, null).why;
+    writeJsonAtomic(path.join(d, 'last.json'), wrote);
+  }
+  fs.rmSync(path.join(d, 'running.json'), {force: true});
+  return {recovered: out, last: wrote};
+}
+/**
+ * The idle lane's decision: running, already inspected (completely), waiting to retry an incomplete attempt, skipped
+ * (nothing to inspect with), started or retrying. Never throws.
+ */
 export function inspectIdle({repo, state, head, config = DEFAULT_CONFIG, records, start = spawnInspection, at = () => new Date().toISOString()}) {
   try {
-    const {running, last} = inspectionState(state);
+    const now = at();
+    let {running, last, complete} = inspectionState(state), recovered = null;
+    // ONE AT A TIME: a live inspector is never started beside.
     if (running && alive(running.pid)) return {state: 'running', commit: running.commit, pid: running.pid, started_at: running.started_at};
-    if (last?.commit === head) return {state: 'already-inspected', commit: head, finished_at: last.finished_at, why: 'this commit was inspected; a new inspection starts when the line moves'};
+    if (running) ({recovered, last} = recoverInspection(state, running, last, now));
+    const judged = [complete, last].filter(x => x?.commit).map(x => ({x, c: inspectionCompleteness(x, records)}));
+    const done = judged.find(j => j.x.commit === head && j.c.complete);
+    if (done) return {state: 'already-inspected', commit: head, finished_at: done.x.finished_at, why: 'this commit was inspected completely; a new inspection starts when the line moves', ...(recovered ? {recovered} : {})};
     if (!config.inspect) return {state: 'skipped', commit: head, why: 'no inspection is configured'};
     if (showAt(repo, head, 'scripts/test-gates/check.mjs') === null) return {state: 'skipped', commit: head, why: 'the commit has no scripts/test-gates/check.mjs to inspect it with'};
-    const plan = {schema: INSPECTION_SCHEMA, repo, commit: head, since: last?.commit ?? null, records, state, inspect: config.inspect, at: at()};
+    // AN INCOMPLETE ATTEMPT OF THIS HEAD is retried when due.
+    const prior = last?.commit === head ? judged.find(j => j.x === last) : null;
+    const attempts = prior ? (Number.isInteger(last.attempt) ? last.attempt : 1) : 0;
+    if (prior) {
+      const ended = Date.parse(last.finished_at ?? last.recovered_at ?? '') || 0;
+      const due = new Date(ended + inspectionRetryMs(attempts, config.inspect.retry ?? DEFAULT_CONFIG.inspect.retry)).toISOString();
+      if (Date.parse(now) < Date.parse(due)) return {state: 'retry-wait', commit: head, attempt: attempts, next_at: due, incomplete: prior.c.why, ...(recovered ? {recovered} : {})};
+    }
+    // THE COMPARISON BASE is the last COMPLETE inspection of another commit.
+    const base = judged.find(j => j.x.commit !== head && j.c.complete)?.x.commit ?? null;
+    const plan = {schema: INSPECTION_SCHEMA, repo, commit: head, since: base, attempt: attempts + 1, records, state, inspect: config.inspect, at: now};
     const pid = start(plan, {state});
-    writeJsonAtomic(path.join(inspectionDirOf(state), 'running.json'), {schema: INSPECTION_SCHEMA, commit: head, pid, started_at: plan.at, since: plan.since});
-    return {state: 'started', commit: head, pid, since: plan.since};
+    writeJsonAtomic(path.join(inspectionDirOf(state), 'running.json'), {schema: INSPECTION_SCHEMA, commit: head, pid, started_at: plan.at, since: plan.since, attempt: plan.attempt});
+    return {state: prior ? 'retrying' : 'started', commit: head, pid, since: plan.since, attempt: plan.attempt, ...(prior ? {incomplete: prior.c.why} : {}), ...(recovered ? {recovered} : {})};
   } catch (e) { return {state: 'failed', commit: head, why: cut(e.message, 300)}; }
 }
 
