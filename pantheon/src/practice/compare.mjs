@@ -142,6 +142,47 @@ export async function compareProfiles({ tickets, baseline = "argo", candidate = 
 // accepted and first pass; Wilcoxon signed-rank for paired costs), and still draws no conclusion of its own.
 const armKey = a => canonical({ profile: a.profile, runOpts: a.runOpts ?? {} });
 
+/**
+ * What one run is charged against the total (#126). The RAW attempt list is the record of calls made; the summary
+ * (resources.provider_calls) is a claim about it and never outranks it.
+ *
+ *   raw      attempts recorded, summary absent or equal: charged the raw count (a recorded empty list is a real zero)
+ *   reserve  no attempt list: charged at least the per-run bound, and the run decides nothing (a shipped summary
+ *            without its calls is not a decided success)
+ *   invalid  the summary is not a non-negative integer, or disagrees with the raw count: charged max(bound, raw),
+ *            so a bad receipt never releases capacity, and the run decides nothing
+ *   invalid_raw  the attempt list is present but malformed (not a list, or an entry that is not an attempt object):
+ *            charged max(bound, entries); the run is recorded unread (its metrics would consume the bad list)
+ *
+ * `overrun`: the raw count exceeds the per-run bound the admission reserved, whatever the summary says.
+ */
+export function chargeOf(run, bound) {
+  const list = run?.attempts;
+  if (list !== undefined && list !== null && (!Array.isArray(list) || list.some(a => !a || typeof a !== "object" || Array.isArray(a)))) {
+    // Present but malformed: not a record of calls. Charged at least the bound; the run is recorded without being read.
+    const n = Array.isArray(list) ? list.length : 0;
+    return { raw: null, counted: Math.max(bound, n), basis: "invalid_raw", overrun: false,
+      why: `the run's attempt list is malformed (${Array.isArray(list) ? "an entry is not an attempt object" : `a ${typeof list}, not a list`}); ${Math.max(bound, n)} calls are charged and it decides nothing` };
+  }
+  const raw = Array.isArray(list) ? list.length : null;
+  const summary = run?.resources?.provider_calls;
+  const hasSummary = summary !== undefined && summary !== null;
+  const overrun = raw !== null && raw > bound;
+  if (hasSummary && !(Number.isSafeInteger(summary) && summary >= 0)) {
+    return { raw, counted: Math.max(bound, raw ?? 0), basis: "invalid", overrun, why: `the run's summary of provider calls (${JSON.stringify(summary)}) is not a non-negative integer` };
+  }
+  if (raw === null) {
+    return { raw, counted: Math.max(bound, hasSummary ? summary : 0), basis: "reserve", overrun: false,
+      why: `the run records no attempt list; ${Math.max(bound, hasSummary ? summary : 0)} calls are reserved and it decides nothing` };
+  }
+  if (hasSummary && summary !== raw) {
+    return { raw, counted: Math.max(bound, raw), basis: "invalid", overrun, why: `the run's summary of ${summary} provider calls disagrees with its ${raw} recorded attempts` };
+  }
+  return { raw, counted: raw, basis: "raw", overrun, why: null };
+}
+// An arm whose accounting cannot be trusted is kept, inconclusive: it decides nothing and cannot qualify a decision.
+const undecided = (row, why) => ({ ...row, status: "inconclusive", accepted: null, first_pass: null, why });
+
 export async function compareArms({ tickets, arms, bounds, totalProviderCalls, runner, providers, question = null, plan = null,
   counterbalance = true, clock = () => Date.now(), at = new Date().toISOString(), pools = [] } = {}) {
   if (!Array.isArray(tickets) || tickets.length === 0) throw new Error("compareArms: pass the tickets to compare");
@@ -162,12 +203,18 @@ export async function compareArms({ tickets, arms, bounds, totalProviderCalls, r
   if (new Set(specs.map(s => s.spec.key)).size !== specs.length) throw new Error("compareArms: ticket keys are distinct");
   const names = ["baseline", "candidate"];
   let spent = 0;
-  const results = [];
+  const results = [], overruns = [];
   for (const [i, { spec }] of specs.entries()) {
     const order = counterbalance && i % 2 === 1 ? [1, 0] : [0, 1];
     const row = { ticket: spec.key, order: order.map(k => names[k]) };
     for (const k of order) {
       const arm = arms[k], name = names[k];
+      if (overruns.length) {
+        // A run already spent past its reservation. What was admitted cannot be undone; nothing more is admitted.
+        row[name] = { ...unobservedRun({ profile: arm.label, why: `not run: an earlier run overran its per-run bound (${overruns[0].ticket}/${overruns[0].arm}: ${overruns[0].raw} > ${B.maxProviderCalls}); the comparison is invalid and admits nothing more`,
+          stakes: stakesOf(null, spec) }), status: "not_run", arm_profile: arm.profile, wall_ms: 0, provider_calls_counted: 0 };
+        continue;
+      }
       if (spent + B.maxProviderCalls > totalProviderCalls) {
         row[name] = { ...unobservedRun({ profile: arm.label, why: `not run: ${spent} calls spent + this run's bound ${B.maxProviderCalls} would exceed the total ${totalProviderCalls}`,
           stakes: stakesOf(null, spec) }), status: "not_run", arm_profile: arm.profile, wall_ms: 0, provider_calls_counted: 0 };
@@ -178,14 +225,20 @@ export async function compareArms({ tickets, arms, bounds, totalProviderCalls, r
       try { out = await runner({ spec, profile: arm.profile, runOpts: arm.runOpts ?? {}, label: arm.label, bounds: structuredClone(B), arm: name }); }
       catch (e) { error = e; }
       const wall_ms = Math.max(0, clock() - t0);
-      // What this run spent: its recorded provider calls; unknown counts at its bound, never as zero.
-      const made = out?.run?.resources?.provider_calls ?? (Array.isArray(out?.run?.attempts) ? out.run.attempts.length : null);
-      const counted = Number.isInteger(made) ? made : B.maxProviderCalls;
-      spent += counted;
-      row[name] = error || !out?.run
-        ? { ...unobservedRun({ profile: arm.label, why: error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),
-          arm_profile: arm.profile, wall_ms, provider_calls_counted: counted }
-        : { ...runMetrics(out.run, { ticket: spec, result: out.result ?? null, profile: arm.label }), arm_profile: arm.profile, wall_ms, provider_calls_counted: counted };
+      // What this run is charged: its RAW attempts; no list reserves at least its bound; a bad summary never lowers it.
+      const before = spent;
+      const c = chargeOf(error ? null : out?.run, B.maxProviderCalls);
+      spent += c.counted;
+      const acct = { provider_calls_raw: c.raw, provider_calls_counted: c.counted, provider_calls_basis: c.basis, provider_calls_before: before, provider_calls_overrun: c.overrun };
+      if (c.overrun) overruns.push({ ticket: spec.key, arm: name, raw: c.raw, bound: B.maxProviderCalls });
+      if (error || !out?.run || c.basis === "invalid_raw") {
+        row[name] = { ...unobservedRun({ profile: arm.label, why: c.basis === "invalid_raw" ? c.why : error?.message ?? out?.result?.error?.message ?? "the runner returned no run record", stakes: stakesOf(null, spec) }),
+          arm_profile: arm.profile, wall_ms, ...acct };
+        continue;
+      }
+      const m = { ...runMetrics(out.run, { ticket: spec, result: out.result ?? null, profile: arm.label }), arm_profile: arm.profile, wall_ms, ...acct };
+      row[name] = c.overrun ? undecided(m, `overran its per-run bound: ${c.raw} recorded attempts > ${B.maxProviderCalls}`)
+        : c.basis === "raw" ? m : undecided(m, c.why);
     }
     results.push(row);
   }
@@ -193,6 +246,8 @@ export async function compareArms({ tickets, arms, bounds, totalProviderCalls, r
     schema: COMPARE_SCHEMA, kind: "arms", synthetic, providers, question, plan,
     arms: Object.fromEntries(arms.map((a, k) => [names[k], { label: a.label, profile: a.profile, runOpts: a.runOpts ?? {}, policy: currentPolicy(a.profile, { pools }) }])),
     bounds: B, total_provider_calls: totalProviderCalls, spent_provider_calls: spent,
+    // An overrun cannot be undone; it invalidates the comparison, which is kept with its actual spend and reason.
+    budget: overruns.length ? { valid: false, overruns, why: "a run spent more provider calls than its admission reserved" } : { valid: true, overruns: [] },
     order: counterbalance ? "alternating per ticket: baseline first on even tickets, candidate first on odd" : "baseline then candidate",
     tickets: specs.map(s => ({ key: s.spec.key, digest: s.digest })),
     results,
