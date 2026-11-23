@@ -1,0 +1,20 @@
+# Independent review and repair evidence
+
+The original implementation is retained at `0ee646878612a79bc8493e20565d74dedb3d31b2` in [draft PR #92](https://github.com/dsmcewan/OPHANIM/pull/92). Claude's original review, including six independent defect reproductions, is preserved in [comment 7070486777](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070486777). It was returned automatically to the original Codex conversation by the installed bridge.
+
+Claude ran the original 15 tests in a separate cloud container on Node 22.23.5; all passed. Its six reproductions established additional defects. Codex reproduced the relevant failing behavior before repairs. The first repair passed 22 tests locally and in Claude's container. A second re-review, preserved in [comment 7070570276](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070570276), closed R2-R5, accepted advisory claims, and found a JSON-escaping variant of R1. Codex reproduced that variant before replacing the raw-size guard with a per-comment message-refusal handler. The current focused suite has 24 tests, all passing on native Linux Node 24.18.0, including the persistent Linux mailbox worker used by Windows.
+
+| Finding | Disposition and evidence |
+| --- | --- |
+| R1: oversized comment aborts every tick | Rejection is recorded once per comment revision with digest and URL; later imports and outbound dispatch continue. Regression failed before repair and passes after. |
+| R1b: JSON escaping exceeds the encoded payload limit below the raw-size limit | All MessageRefused errors are handled per comment, with a durable rejection record. Unexpected database failures remain retryable. The 20021-byte escaping reproduction failed before repair and passes after. |
+| R2: marker on any line impersonates a reply | Only the literal first-line reply/ACK header is accepted. Owner notes with an embedded header are ignored. Regression failed before repair and passes after. |
+| R3: quoted ACK acknowledges a request | ACKs must be exact unquoted lines in the header block before the first blank line. A footer quotation does not acknowledge. Regression failed before repair and passes after. |
+| R4: quoted outbound marker drops a reply | Removed the substring suppression. First-line protocol parsing excludes outbound messages and preserves replies containing quotations. Regression failed before repair and passes after. |
+| R5: native sends cannot be reconciled | Status lists uncertain IDs/routes. A recipient's explicit ACK proves delivery; operators can record an evidence-based delivered/requeue decision. No automatic replay. Added tests also cover a late sender result arriving after recipient acknowledgement. |
+| R6: claim tokens do not fence actual writes | Claims are intentionally advisory. The README and tool description already said this; the validation wording now explicitly distinguishes rejecting stale claim tokens from fencing filesystem writes. No filesystem fencing is claimed. |
+| R7: Windows stale PID-file lock race | A PowerShell supervisor holds an owner/thread-scoped Windows mutex for the full Node-child lifetime. The PID file is status metadata only. On Windows, a second supervisor was refused while the active Node PID stayed unchanged; a repeated start helper also kept that PID. |
+
+The Windows named-pipe connection was verified against the original Codex thread. The original cloud Claude confirmed direct CLI receipt with `NATIVE-CLI-ACK 20261121-ophanim` in [comment 7070419893](https://github.com/dsmcewan/OPHANIM/pull/87#issuecomment-7070419893). Both replies arrived automatically in the desktop conversation. These checks establish transport operation, not acceptance or release of the implementation.
+
+The pinned shared review checkout remains at `3249bb27d275c549831482b8191568171db73eb9` without tracked changes. All implementation changes are in the separate collaboration worktree. The original review and delivery receipts remain in the mailbox; changes do not erase them. Re-review of the repaired commit is requested separately.
